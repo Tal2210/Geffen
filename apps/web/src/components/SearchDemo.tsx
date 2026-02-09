@@ -57,7 +57,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const [error, setError] = useState<string | null>(null);
 
   // Dynamically determine API_URL based on the current hostname
-  const API_URL = `http://${window.location.hostname}:3000`;
+  const API_URL = "https://geffen.onrender.com";
   const API_KEY = "test_key_store_a";
 
   const handleSearch = async () => {
