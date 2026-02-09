@@ -228,7 +228,7 @@ export class SearchService {
       const hardFilteredResults = baseResults.filter((p: any) => {
         const productCategories = Array.isArray(p.category) ? p.category : [];
         if (hardCategorySet.size > 0) {
-          const hasCategory = productCategories.some((c) => hardCategorySet.has(c));
+        const hasCategory = productCategories.some((c: string) => hardCategorySet.has(c));
           if (!hasCategory) return false;
         }
         if (mergedFilters.kosher !== undefined && p.kosher !== mergedFilters.kosher) return false;

@@ -229,7 +229,7 @@ export class VectorSearchService {
     const terms = query
       .split(/\s+/)
       .map((t) => t.trim())
-      .filter(Boolean);
+      .filter((t): t is string => Boolean(t));
     if (terms.length === 0) return null;
 
     const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -240,7 +240,10 @@ export class VectorSearchService {
       };
     });
 
-    return perTerm.length === 1 ? perTerm[0] : { $and: perTerm };
+    if (perTerm.length === 1) {
+      return perTerm[0] as Record<string, any>;
+    }
+    return { $and: perTerm };
   }
 
   /**

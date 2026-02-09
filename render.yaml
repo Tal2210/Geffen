@@ -1,3 +1,31 @@
+services:
+  - type: web
+    name: geffen-search-api
+    env: node
+    rootDir: apps/search-api
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: wine
+      - key: MONGO_COLLECTION
+        value: stores.bana
+      - key: LLM_API_KEY
+        sync: false
+      - key: NER_ENABLED
+        value: "true"
+      - key: NER_MODEL
+        value: models/gemini-2.0-flash-lite
+      - key: CORS_ORIGIN
+        value: "*"
 # Render.com deployment configuration
 # For multi-service deployment (Main API + Search API)
 
