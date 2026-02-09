@@ -1,0 +1,31 @@
+{
+  "name": "@geffen-brain/api",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "NODE_OPTIONS='--tls-min-v1.0 --tls-max-v1.2' tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "NODE_OPTIONS='--tls-min-v1.0' node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "seed:demo": "tsx src/seed/runDemo.ts",
+    "demo:pipeline": "tsx src/seed/runPipeline.ts",
+    "run:auto": "tsx src/seed/runFromExistingMongo.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.0",
+    "@prisma/client": "^6.0.0",
+    "dotenv": "^17.0.0",
+    "fastify": "^5.0.0",
+    "pino-pretty": "^13.0.0",
+    "pino": "^9.0.0",
+    "mongodb": "^6.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prisma": "^6.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

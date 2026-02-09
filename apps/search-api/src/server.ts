@@ -1,0 +1,141 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import dotenv from "dotenv";
+import { EnvSchema, type Env } from "./types/index.js";
+import { SearchService } from "./services/searchService.js";
+import { createSearchRoutes } from "./routes/search.js";
+import { authMiddleware } from "./middleware/auth.js";
+import { rateLimitMiddleware } from "./middleware/rateLimit.js";
+
+// ESM equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Load environment variables
+ * Try multiple locations for .env file
+ */
+function loadEnv(): Env {
+  const candidates = [
+    ".env",
+    path.resolve("..", "..", ".env"),
+    path.resolve(__dirname, "..", "..", ".env"),
+  ];
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      dotenv.config({ path: p, override: false });
+    }
+  }
+
+  const parsed = EnvSchema.safeParse(process.env);
+  if (!parsed.success) {
+    const message = parsed.error.issues
+      .map((i) => `${i.path.join(".")}: ${i.message}`)
+      .join("; ");
+    throw new Error(`Invalid environment variables: ${message}`);
+  }
+
+  return parsed.data;
+}
+
+/**
+ * Build and configure the Fastify server
+ */
+async function buildServer() {
+  const env = loadEnv();
+
+  const server = Fastify({
+    logger: {
+      level: env.NODE_ENV === "production" ? "info" : "debug",
+      transport:
+        env.NODE_ENV === "development"
+          ? {
+              target: "pino-pretty",
+              options: {
+                translateTime: "HH:MM:ss Z",
+                ignore: "pid,hostname",
+              },
+            }
+          : undefined,
+    },
+  });
+
+  // Log CORS_ORIGIN for debugging
+  server.log.info({ corsOrigin: env.CORS_ORIGIN }, "CORS_ORIGIN configured");
+
+  // Initialize search service
+  const searchService = new SearchService(env);
+  await searchService.initialize();
+  server.log.info(
+    { db: env.MONGO_DB, collection: env.MONGO_COLLECTION },
+    "Search service initialized"
+  );
+
+  // Enable CORS
+  await server.register(cors, {
+    origin: env.CORS_ORIGIN || true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-API-Key"], // Added X-API-Key
+  });
+
+  // Add global hooks for middleware
+  server.addHook("onRequest", authMiddleware);
+  server.addHook("onRequest", rateLimitMiddleware);
+
+  // Register routes
+  await server.register(createSearchRoutes(searchService));
+
+  // Graceful shutdown
+  server.addHook("onClose", async () => {
+    server.log.info("Closing search service...");
+    await searchService.close();
+  });
+
+  return server;
+}
+
+/**
+ * Start the server
+ */
+async function start() {
+  const env = loadEnv();
+  const port = env.PORT;
+  const host = "0.0.0.0";
+
+  try {
+    const server = await buildServer();
+    await server.listen({ port, host });
+
+    server.log.info(
+      {
+        port,
+        env: env.NODE_ENV,
+        mongoDb: env.MONGO_DB,
+        collection: env.MONGO_COLLECTION,
+      },
+      "🚀 Search API listening"
+    );
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  }
+}
+
+// Handle uncaught errors
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception:", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled rejection:", reason);
+  process.exit(1);
+});
+
+// Start the server
+start();

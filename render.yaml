@@ -1,0 +1,60 @@
+# Render.com deployment configuration
+# For multi-service deployment (Main API + Search API)
+
+services:
+  # Main API (existing)
+  - type: web
+    name: geffen-brain-api
+    runtime: node
+    env: node
+    region: frankfurt  # EU region
+    plan: starter  # $7/month
+    buildCommand: cd apps/api && corepack pnpm install && corepack pnpm build
+    startCommand: cd apps/api && corepack pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false  # Set in Render dashboard
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        sync: false
+      - key: PORT
+        value: 4000
+    healthCheckPath: /health
+    autoDeploy: true
+
+  # Search API (new)
+  - type: web
+    name: geffen-brain-search-api
+    runtime: node
+    env: node
+    region: frankfurt  # EU region - same as main API
+    plan: starter  # $7/month
+    buildCommand: cd apps/search-api && corepack pnpm install && corepack pnpm build
+    startCommand: cd apps/search-api && corepack pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false  # Set in Render dashboard
+      - key: MONGO_DB
+        sync: false
+      - key: MONGO_COLLECTION
+        value: bana.stores
+      - key: PORT
+        value: 3000
+      - key: LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: LLM_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: EMBEDDING_MODEL
+        value: text-embedding-004
+      - key: CORS_ORIGIN
+        value: "*"  # Configure based on your frontend domain
+    healthCheckPath: /health
+    autoDeploy: true
+    scaling:
+      minInstances: 1  # Always-on
+      maxInstances: 5  # Auto-scale up to 5 instances

@@ -1,0 +1,317 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SignalType {
+  SPIKE_DEMAND
+  NO_RESULTS_SPIKE
+  HIGH_INTEREST_LOW_CONVERSION
+}
+
+enum CtaType {
+  PROMOTE_THIS_THEME
+  FIX_THIS_ISSUE
+  TALK_ABOUT_THIS
+}
+
+enum EntityType {
+  query
+  topic
+  product
+}
+
+enum InsightStatus {
+  ACTIVE
+  EXECUTED
+  DISMISSED
+}
+
+enum FeedbackKind {
+  EXECUTED
+  NOT_RELEVANT
+}
+
+enum Audience {
+  retailer
+  winery
+  bar
+}
+
+model Store {
+  id        String   @id @default(cuid())
+  name      String
+  timezone  String   @default("America/Los_Angeles")
+  createdAt DateTime @default(now())
+
+  products       Product[]
+  inventory      Inventory[]
+  searchEvents   SearchEvent[]
+  clickEvents    ClickEvent[]
+  purchaseEvents PurchaseEvent[]
+  aggQueries     AggQuery[]
+  aggTopics      AggTopic[]
+  aggProducts    AggProduct[]
+  signals        Signal[]
+  insights       Insight[]
+  feedback       InsightFeedback[]
+  cooldowns      InsightCooldown[]
+  settings       StoreSettings?
+
+  @@index([createdAt])
+}
+
+model Product {
+  // `productId` is external/canonical product identifier.
+  productId  String
+  storeId    String
+  store      Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  title      String
+  winery     String?
+  varietal   String?
+  priceCents Int?
+  tagsJson   Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  inventory  Inventory?
+  aggProduct AggProduct[]
+
+  @@id([storeId, productId])
+  @@index([storeId])
+  @@index([storeId, updatedAt])
+}
+
+model Inventory {
+  storeId   String
+  productId String
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [storeId, productId], references: [storeId, productId], onDelete: Cascade)
+
+  stockQty  Int
+  updatedAt DateTime @updatedAt
+
+  @@id([storeId, productId])
+  @@index([storeId])
+  @@index([storeId, updatedAt])
+}
+
+model SearchEvent {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  timestamp    DateTime
+  query        String
+  queryNorm    String
+  resultsCount Int
+
+  createdAt DateTime @default(now())
+
+  @@index([storeId, timestamp])
+  @@index([storeId, queryNorm, timestamp])
+}
+
+model ClickEvent {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  timestamp DateTime
+  query     String?
+  queryNorm String?
+
+  productId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([storeId, timestamp])
+  @@index([storeId, queryNorm, timestamp])
+  @@index([storeId, productId, timestamp])
+}
+
+model PurchaseEvent {
+  id           String   @id @default(cuid())
+  storeId      String
+  store        Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  timestamp    DateTime
+  orderId      String
+  revenueCents Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, orderId])
+  @@index([storeId, timestamp])
+}
+
+model AggQuery {
+  storeId         String
+  weekStart       DateTime @db.Date
+  queryNorm       String
+  searches        Int
+  ctr             Float
+  conversionRate  Float
+  revenueCents    Int
+  deltaWoW        Float
+  avgResultsCount Float
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([storeId, weekStart, queryNorm])
+  @@index([storeId, weekStart])
+}
+
+model AggTopic {
+  storeId        String
+  weekStart      DateTime @db.Date
+  topic          String
+  searches       Int
+  conversionRate Float
+  deltaWoW       Float
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([storeId, weekStart, topic])
+  @@index([storeId, weekStart])
+}
+
+model AggProduct {
+  storeId      String
+  weekStart    DateTime @db.Date
+  productId    String
+  views        Int
+  purchases    Int
+  revenueCents Int
+  deltaWoW     Float
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [storeId, productId], references: [storeId, productId], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([storeId, weekStart, productId])
+  @@index([storeId, weekStart])
+}
+
+model Signal {
+  id         String     @id @default(cuid())
+  storeId    String
+  store      Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  weekStart  DateTime   @db.Date
+  type       SignalType
+  entityType EntityType
+  entityKey  String
+
+  evidenceJson Json
+  confidence   Float
+
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, weekStart, type, entityType, entityKey])
+  @@index([storeId, weekStart])
+  @@index([storeId, type, weekStart])
+}
+
+model Insight {
+  id         String      @id @default(cuid())
+  storeId    String
+  store      Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  weekStart  DateTime    @db.Date
+  ctaType    CtaType
+  entityType EntityType
+  entityKey  String
+
+  // Lower number = higher priority in UI
+  priority   Int
+  confidence Float
+
+  // Deterministic, structured evidence for UI + LLM summarization.
+  evidenceJson Json
+
+  // Deterministic recommended action template (no LLM).
+  recommendedAction String
+
+  status    InsightStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  copy      InsightCopy[]
+  feedback  InsightFeedback[]
+
+  @@unique([storeId, weekStart, ctaType, entityType, entityKey])
+  @@index([storeId, weekStart])
+  @@index([storeId, status, weekStart])
+}
+
+model InsightCopy {
+  id        String   @id @default(cuid())
+  insightId String
+  insight   Insight  @relation(fields: [insightId], references: [id], onDelete: Cascade)
+
+  audience          Audience
+  title             String
+  explanation       String
+  newsletterSubject String
+  newsletterBody    String
+  socialTalkingPoints String
+
+  model     String
+  createdAt DateTime @default(now())
+
+  @@unique([insightId, audience])
+  @@index([audience, createdAt])
+}
+
+model InsightFeedback {
+  id        String       @id @default(cuid())
+  insightId String
+  insight   Insight      @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  storeId   String
+  store     Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  kind      FeedbackKind
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([insightId, createdAt])
+}
+
+model InsightCooldown {
+  id         String     @id @default(cuid())
+  storeId    String
+  store      Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  entityType EntityType
+  entityKey  String
+
+  lastGeneratedAt DateTime?
+  lastExecutedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([storeId, entityType, entityKey])
+  @@index([storeId, updatedAt])
+}
+
+model StoreSettings {
+  storeId String @id
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  // Store-specific thresholds and caps (fallback to defaults in code).
+  json      Json
+  updatedAt DateTime @updatedAt
+}
+

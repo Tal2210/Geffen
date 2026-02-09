@@ -1,0 +1,26 @@
+{
+  "name": "geffen-brain",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev:api": "corepack pnpm --filter @geffen-brain/api dev",
+    "dev:web": "corepack pnpm --filter @geffen-brain/web dev",
+    "dev": "corepack pnpm -r --parallel dev",
+    "build": "corepack pnpm -r build",
+    "test": "corepack pnpm -r test",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.0.0",
+    "prisma": "^6.0.0",
+    "typescript": "^5.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "esbuild", "prisma"],
+    "overrides": {
+      "esbuild": "0.25.12"
+    }
+  }
+}
