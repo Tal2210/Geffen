@@ -270,11 +270,35 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
 
   const colors = ["red", "white", "rosé", "sparkling"];
   const visibleAutocompleteOptions = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const normalize = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const q = normalize(query);
     if (!q) return [];
-    return autocompleteOptions
-      .filter((name) => name.toLowerCase().includes(q))
+    const queryTerms = q.split(/\s+/).filter((t) => t.length > 1);
+
+    const scored = autocompleteOptions.map((name) => {
+      const normalizedName = normalize(name);
+      if (normalizedName.includes(q)) return { name, score: 100 };
+      const termHits = queryTerms.reduce(
+        (sum, term) => sum + (normalizedName.includes(term) ? 1 : 0),
+        0
+      );
+      return { name, score: termHits };
+    });
+
+    const matched = scored
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.name)
       .slice(0, 6);
+
+    if (matched.length > 0) return matched;
+    return autocompleteOptions.slice(0, 6);
   }, [autocompleteOptions, query]);
 
   return (
@@ -319,6 +343,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
             <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-geffen-700">
               Query
             </label>
+            <p className="mb-3 text-xs text-slate-500">
+              Ask in natural language. Example: red wine from bordeaux under ₪220
+            </p>
             <div className="flex flex-col gap-3 md:flex-row">
               <div className="relative flex-1">
                 <input

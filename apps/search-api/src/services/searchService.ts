@@ -197,7 +197,12 @@ export class SearchService {
 
       const hardTypeCats = mapTypeToCategory(mergedFilters.type);
       const hardColorCats = mapColorToCategory(mergedFilters.category);
-      const hardCategorySet = new Set(hardColorCats.length > 0 ? hardColorCats : hardTypeCats);
+      const normalizedTypes = (mergedFilters.type || []).map((t: string) => String(t).toLowerCase());
+      const hasSpecificTypeConstraint = normalizedTypes.some((t: string) => t !== "wine");
+      const shouldApplyTypeAsHardCategory = hasSpecificTypeConstraint;
+      const hardCategorySet = new Set(
+        hardColorCats.length > 0 ? hardColorCats : shouldApplyTypeAsHardCategory ? hardTypeCats : []
+      );
       const countryAliasMap: Record<string, string[]> = {
         france: ["france", "french", "צרפת", "צרפתי", "צרפתית"],
         italy: ["italy", "italian", "איטליה", "איטלקי", "איטלקית"],
