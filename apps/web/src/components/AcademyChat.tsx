@@ -55,6 +55,7 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
   const [popularWeek, setPopularWeek] = useState<AcademyProduct[]>([]);
   const [loadingPopularWeek, setLoadingPopularWeek] = useState(false);
   const [refreshingWeekly, setRefreshingWeekly] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<AcademyProduct | null>(null);
 
   const API_URL = import.meta.env.VITE_SEARCH_API_URL || "https://geffen.onrender.com";
   const API_KEY = import.meta.env.VITE_SEARCH_API_KEY || "test_key_store_a";
@@ -274,27 +275,28 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
                             productId: p._id,
                             query: lastQuestion,
                           });
+                          setSelectedProduct(p);
                         }}
-                        className="rounded-xl border border-geffen-100 bg-white p-3 text-left transition hover:border-geffen-300 hover:shadow-sm"
+                        className="rounded-xl border border-geffen-100 bg-gradient-to-b from-white to-geffen-50/40 p-3 text-left transition hover:border-geffen-300 hover:shadow-md"
                       >
                         <div className="flex gap-3">
                           {p.imageUrl ? (
                             <img
                               src={p.imageUrl}
                               alt={p.name}
-                              className="h-16 w-16 rounded-lg border border-geffen-100 object-contain"
+                              className="h-20 w-20 rounded-lg border border-geffen-100 bg-white object-contain"
                             />
                           ) : (
-                            <div className="h-16 w-16 rounded-lg bg-geffen-100" />
+                            <div className="h-20 w-20 rounded-lg bg-geffen-100" />
                           )}
                           <div className="min-w-0">
                             <p className="line-clamp-2 text-sm font-semibold text-slate-900">{p.name}</p>
                             {formatIls(p.price) && (
-                              <p className="text-xs font-medium text-geffen-700">{formatIls(p.price)}</p>
+                              <p className="mt-0.5 text-xs font-semibold text-geffen-700">{formatIls(p.price)}</p>
                             )}
-                            <p className="mt-1 text-xs text-slate-500">{p.reason}</p>
-                            <p className="mt-1 text-[11px] font-medium text-slate-400">
-                              לימוד: לחץ על הכרטיס כדי לרשום אינטראקציה למדדי פופולריות.
+                            <p className="mt-1 line-clamp-3 text-xs text-slate-600">{p.reason}</p>
+                            <p className="mt-1 text-[11px] font-semibold text-geffen-700">
+                              לחץ לפירוט מקצועי
                             </p>
                           </div>
                         </div>
@@ -338,6 +340,52 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
           </div>
         </div>
       </main>
+
+      {selectedProduct && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 p-4 md:items-center">
+          <div className="w-full max-w-xl rounded-2xl border border-geffen-100 bg-white p-5 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-geffen-700">Product Deep Dive</p>
+                <h3 className="mt-1 text-base font-semibold text-slate-900">{selectedProduct.name}</h3>
+                {formatIls(selectedProduct.price) && (
+                  <p className="text-sm font-semibold text-geffen-700">{formatIls(selectedProduct.price)}</p>
+                )}
+              </div>
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="rounded-full border border-geffen-200 px-3 py-1 text-xs font-semibold text-geffen-700 hover:border-geffen-400"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-[90px,1fr] gap-4">
+              {selectedProduct.imageUrl ? (
+                <img
+                  src={selectedProduct.imageUrl}
+                  alt={selectedProduct.name}
+                  className="h-[90px] w-[90px] rounded-lg border border-geffen-100 bg-white object-contain"
+                />
+              ) : (
+                <div className="h-[90px] w-[90px] rounded-lg bg-geffen-100" />
+              )}
+              <div className="space-y-2">
+                <div className="rounded-lg border border-geffen-100 bg-geffen-50/40 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-geffen-700">Why this matches</p>
+                  <p className="mt-1 text-sm text-slate-700">{selectedProduct.reason}</p>
+                </div>
+                {selectedProduct.description && (
+                  <div className="rounded-lg border border-slate-100 bg-white p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">Product notes</p>
+                    <p className="mt-1 text-sm text-slate-700">{selectedProduct.description}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

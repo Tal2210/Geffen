@@ -150,7 +150,10 @@ export class AcademyChatService {
 
   private async answerRecommendation(question: string): Promise<AcademyAnswer> {
     const filters = this.extractFilters(question);
-    const products = await this.semanticOrTextSearch(question, filters, 5);
+    let products = await this.semanticOrTextSearch(question, filters, 5);
+    if (products.length === 0) {
+      products = await this.getDefaultRecommendationPool(5);
+    }
 
     const enriched = products.map((doc: any) => ({
       _id: String(doc._id),
@@ -163,10 +166,7 @@ export class AcademyChatService {
 
     return {
       mode: "recommendation",
-      answer:
-        enriched.length > 0
-          ? "אלה היינות המתאימים ביותר לשאלה שלך. השתמש בסיבות שעל כל כרטיס כדי להסביר לעובד חדש איך להתאים יין לצורך של הלקוח."
-          : "לא נמצאו התאמות מספיק טובות לשאלה הזו כרגע.",
+      answer: this.buildRecommendationSummary(question, filters, enriched),
       products: enriched,
       teachingPlan: this.buildTeachingPlan(question, "recommendation", enriched),
     };
@@ -265,7 +265,7 @@ export class AcademyChatService {
         const score = this.cosineSimilarity(queryEmbedding, emb);
         return { ...doc, score };
       })
-      .filter((d) => Number.isFinite(d.score) && (d.score || 0) > 0)
+      .filter((d) => Number.isFinite(d.score))
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
     if (scored.length > 0) {
@@ -295,9 +295,27 @@ export class AcademyChatService {
         const score = this.cosineSimilarity(queryEmbedding, emb);
         return { ...doc, score };
       })
-      .filter((d) => Number.isFinite(d.score) && (d.score || 0) > 0)
+      .filter((d) => Number.isFinite(d.score))
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, limit);
+  }
+
+  private async getDefaultRecommendationPool(limit: number): Promise<AcademyProduct[]> {
+    return (await this.collection
+      .find({ embedding: { $exists: true, $type: "array", $ne: [] } })
+      .project({
+        name: 1,
+        description: 1,
+        price: 1,
+        imageUrl: 1,
+        image: 1,
+        category: 1,
+        softCategory: 1,
+        color: 1,
+      })
+      .sort({ updatedAt: -1 })
+      .limit(limit)
+      .toArray()) as AcademyProduct[];
   }
 
   private cosineSimilarity(a: number[], b: number[]): number {
@@ -386,21 +404,30 @@ export class AcademyChatService {
     const categories = Array.isArray(doc.category) ? doc.category : [];
     const soft = Array.isArray(doc.softCategory) ? doc.softCategory : [];
     const colorValue = typeof doc.color === "string" ? doc.color.toLowerCase() : "";
+    const desc = this.toPlainText(doc.description || "");
+    const signals = this.extractWineSignals(desc);
+
     if (filters.category && (categories.includes(filters.category) || this.categoryTokens(filters.category).some((t) => colorValue.includes(t.toLowerCase())))) {
-      reasons.push(`סוג יין: ${filters.category}`);
+      reasons.push(`סוג יין תואם: ${filters.category}`);
     }
     for (const t of filters.tags) {
       if (soft.includes(t)) reasons.push(`מתאים ל-${t}`);
     }
-    const desc = this.toPlainText(doc.description || "");
+
+    const styleReason = this.buildStyleReason(signals);
+    if (styleReason) reasons.push(styleReason);
+
+    const pairingReason = this.buildPairingReason(filters.tags, signals);
+    if (pairingReason) reasons.push(pairingReason);
+
     if (reasons.length === 0) {
       if (desc) {
-        return `התאמה סמנטית גבוהה לתיאור: "${desc.slice(0, 90)}..."`;
+        return `התאמה סמנטית גבוהה: "${desc.slice(0, 120)}..."`;
       }
       return "התאמה סמנטית גבוהה לשאלה ולתיאור המוצר.";
     }
     const guidance = this.trainingTip(filters);
-    return `${reasons.join(", ")}. ${guidance}`;
+    return `${reasons.join(" | ")}. ${guidance}`;
   }
 
   private trainingTip(filters: { category?: string; tags: string[] }): string {
@@ -417,6 +444,99 @@ export class AcademyChatService {
       return "טיפ מכירה: ודא מול הלקוח העדפה ליבש מלא מול חצי-יבש.";
     }
     return "טיפ מכירה: שאל שאלת המשך על מנה/תקציב כדי לדייק את ההמלצה.";
+  }
+
+  private buildRecommendationSummary(
+    question: string,
+    filters: { category?: string; tags: string[] },
+    products: Array<{ reason?: string }>
+  ): string {
+    if (products.length === 0) {
+      return "לא נמצאו התאמות מספיק טובות לשאלה הזו כרגע.";
+    }
+
+    const dimensions: string[] = [];
+    if (filters.category) dimensions.push(`סוג יין (${filters.category})`);
+    if (filters.tags.includes("בשר")) dimensions.push("התאמה לבשר");
+    if (filters.tags.includes("דגים")) dimensions.push("התאמה לדגים");
+    if (filters.tags.includes("יבש")) dimensions.push("רמת יובש");
+    if (filters.tags.includes("ישראל")) dimensions.push("מקור היין");
+
+    const basis = dimensions.length > 0 ? dimensions.join(", ") : "התאמה סמנטית לתיאורי המוצרים";
+    return `ניתחתי את השאילתה "${question}" ודירגתי את ההמלצות לפי ${basis}. בכל כרטיס תראה נימוק מקצועי לשיחה עם לקוח (סגנון, התאמה לאוכל וטיפ מכירה).`;
+  }
+
+  private extractWineSignals(text: string): {
+    body?: "light" | "medium" | "full";
+    acidity?: "high" | "medium" | "low";
+    tannins?: "high" | "medium" | "low";
+    fruit?: boolean;
+    oak?: boolean;
+    spice?: boolean;
+    mineral?: boolean;
+  } {
+    const t = text.toLowerCase();
+    const has = (re: RegExp) => re.test(t);
+    return {
+      body: has(/גוף מלא|full[- ]?bod|עשיר|עוצמתי/) ? "full" : has(/בינוני|medium/) ? "medium" : has(/קליל|light/) ? "light" : undefined,
+      acidity: has(/חומציות גבוהה|high acidity|רעננ/) ? "high" : has(/חומציות נמוכה|low acidity|רך/) ? "low" : has(/חומציות/) ? "medium" : undefined,
+      tannins: has(/טאני|tannin|טאנינים גבוה/) ? "high" : has(/טאנינים רכים|soft tannin/) ? "low" : has(/טאנינים/) ? "medium" : undefined,
+      fruit: has(/פירות|berry|cherry|plum|citrus|תפוח|אגס/),
+      oak: has(/עץ אלון|oak|barrel|חבית/),
+      spice: has(/תבלין|spice|פלפל|pepper/),
+      mineral: has(/מינרל|flinty|mineral/),
+    };
+  }
+
+  private buildStyleReason(signals: {
+    body?: "light" | "medium" | "full";
+    acidity?: "high" | "medium" | "low";
+    tannins?: "high" | "medium" | "low";
+    fruit?: boolean;
+    oak?: boolean;
+    spice?: boolean;
+    mineral?: boolean;
+  }): string | null {
+    const parts: string[] = [];
+    if (signals.body === "full") parts.push("גוף מלא");
+    if (signals.body === "medium") parts.push("גוף בינוני");
+    if (signals.body === "light") parts.push("גוף קליל");
+    if (signals.acidity === "high") parts.push("חומציות רעננה");
+    if (signals.tannins === "high") parts.push("טאנינים מורגשים");
+    if (signals.fruit) parts.push("פרופיל פרי בולט");
+    if (signals.oak) parts.push("השפעת עץ/חבית");
+    if (parts.length === 0) return null;
+    return `פרופיל סגנוני: ${parts.slice(0, 3).join(", ")}`;
+  }
+
+  private buildPairingReason(
+    tags: string[],
+    signals: {
+      body?: "light" | "medium" | "full";
+      acidity?: "high" | "medium" | "low";
+      tannins?: "high" | "medium" | "low";
+      fruit?: boolean;
+      oak?: boolean;
+      spice?: boolean;
+      mineral?: boolean;
+    }
+  ): string | null {
+    if (tags.includes("בשר")) {
+      if (signals.body === "full" || signals.tannins === "high") {
+        return "התאמה לבשר: גוף וטאנינים מאזנים שומן וחלבון";
+      }
+      return "התאמה לבשר: מבנה מאוזן מתאים למנות בשר בינוניות";
+    }
+    if (tags.includes("דגים")) {
+      if (signals.acidity === "high" || signals.mineral) {
+        return "התאמה לדגים: חומציות/מינרליות מאזנות מרקם עדין";
+      }
+      return "התאמה לדגים: סגנון רענן שלא משתלט על המנה";
+    }
+    if (tags.includes("גבינות")) {
+      return "התאמה לגבינות: ניתן להתאים את עוצמת היין לעוצמת הגבינה";
+    }
+    return null;
   }
 
   private buildTeachingPlan(
