@@ -6,6 +6,11 @@ import cors from "@fastify/cors";
 import dotenv from "dotenv";
 import { EnvSchema, type Env } from "./types/index.js";
 import { SearchService } from "./services/searchService.js";
+import { ProductExplanationService } from "./services/productExplanationService.js";
+import { BoostRuleService } from "./services/boostRuleService.js";
+import { ProductCatalogService } from "./services/productCatalogService.js";
+import { AcademyChatService } from "./services/academyChatService.js";
+import { AcademyMetricsService } from "./services/academyMetricsService.js";
 import { createSearchRoutes } from "./routes/search.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rateLimit.js";
@@ -20,12 +25,15 @@ const __dirname = path.dirname(__filename);
  */
 function loadEnv(): Env {
   const candidates = [
-    ".env",
-    path.resolve("..", "..", ".env"),
-    path.resolve(__dirname, "..", "..", ".env"),
+    // Always prefer the service-local env file first.
+    path.resolve(__dirname, "..", ".env"),
+    path.resolve(process.cwd(), "apps", "search-api", ".env"),
+    // Workspace root env as fallback.
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(__dirname, "..", "..", "..", ".env"),
   ];
 
-  for (const p of candidates) {
+  for (const p of Array.from(new Set(candidates))) {
     if (fs.existsSync(p)) {
       dotenv.config({ path: p, override: false });
     }
@@ -68,7 +76,16 @@ async function buildServer() {
   server.log.info({ corsOrigin: env.CORS_ORIGIN }, "CORS_ORIGIN configured");
 
   // Initialize search service
-  const searchService = new SearchService(env);
+  const boostRuleService = new BoostRuleService(env);
+  const productCatalogService = new ProductCatalogService(env);
+  const academyMetricsService = new AcademyMetricsService(env);
+  const academyChatService = new AcademyChatService(env, academyMetricsService);
+  const searchService = new SearchService(env, boostRuleService);
+  const productExplanationService = new ProductExplanationService(env);
+  await boostRuleService.connect();
+  await productCatalogService.connect();
+  await academyMetricsService.connect();
+  await academyChatService.connect();
   await searchService.initialize();
   server.log.info(
     { db: env.MONGO_DB, collection: env.MONGO_COLLECTION },
@@ -88,12 +105,25 @@ async function buildServer() {
   server.addHook("onRequest", rateLimitMiddleware);
 
   // Register routes
-  await server.register(createSearchRoutes(searchService));
+  await server.register(
+    createSearchRoutes(
+      searchService,
+      productExplanationService,
+      boostRuleService,
+      productCatalogService,
+      academyChatService,
+      academyMetricsService
+    )
+  );
 
   // Graceful shutdown
   server.addHook("onClose", async () => {
     server.log.info("Closing search service...");
     await searchService.close();
+    await boostRuleService.close();
+    await productCatalogService.close();
+    await academyMetricsService.close();
+    await academyChatService.close();
   });
 
   return server;

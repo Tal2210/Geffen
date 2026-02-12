@@ -80,6 +80,12 @@ export class VectorSearchService {
           alcohol: 1,
           volume: 1,
           imageUrl: 1,
+          image_url: 1,
+          image: 1,
+          images: 1,
+          featuredImage: 1,
+          featured_image: 1,
+          thumbnail: 1,
           inStock: 1,
           stockCount: 1,
           rating: 1,
@@ -98,7 +104,7 @@ export class VectorSearchService {
 
     try {
       const results = await this.collection.aggregate(pipeline).toArray();
-      return results as VectorSearchHit[];
+      return results.map((doc) => this.normalizeImageFields(doc)) as VectorSearchHit[];
     } catch (error) {
       console.error("Vector search failed:", error);
 
@@ -151,6 +157,12 @@ export class VectorSearchService {
         alcohol: 1,
         volume: 1,
         imageUrl: 1,
+        image_url: 1,
+        image: 1,
+        images: 1,
+        featuredImage: 1,
+        featured_image: 1,
+        thumbnail: 1,
         inStock: 1,
         stockCount: 1,
         rating: 1,
@@ -164,11 +176,14 @@ export class VectorSearchService {
       .limit(limit)
       .toArray();
 
-    return results.map((doc) => ({
-      ...doc,
-      _id: doc._id.toString(),
-      score: 1.0,
-    })) as VectorSearchHit[];
+    return results.map((doc) => {
+      const normalized = this.normalizeImageFields(doc);
+      return {
+        ...normalized,
+        _id: doc._id.toString(),
+        score: 1.0,
+      };
+    }) as VectorSearchHit[];
   }
 
   /**
@@ -188,10 +203,27 @@ export class VectorSearchService {
       .toArray();
 
     return results.map((doc) => ({
-      ...doc,
+      ...this.normalizeImageFields(doc),
       _id: doc._id.toString(),
       score: 0.5, // Default score for fallback
     })) as VectorSearchHit[];
+  }
+
+  private normalizeImageFields(doc: any): any {
+    const firstImage =
+      doc?.image?.url ||
+      doc?.image?.src ||
+      doc?.featuredImage?.url ||
+      doc?.featuredImage?.src ||
+      doc?.featured_image?.url ||
+      doc?.featured_image?.src ||
+      doc?.thumbnail ||
+      (Array.isArray(doc?.images) ? doc.images[0]?.url || doc.images[0]?.src : undefined);
+
+    return {
+      ...doc,
+      imageUrl: doc?.imageUrl || doc?.image_url || firstImage,
+    };
   }
 
   private buildPreFilter(extractedFilters: ExtractedFilters): Record<string, any> {

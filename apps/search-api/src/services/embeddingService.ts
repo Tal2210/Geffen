@@ -1,142 +1,173 @@
 import type { Env } from "../types/index.js";
 
-/**
- * Generates vector embeddings for semantic search
- * Uses OpenAI-compatible API (Gemini, OpenAI, or local models)
- */
+type EmbeddingProvider = "gemini" | "openai";
+
 export class EmbeddingService {
+  private provider: EmbeddingProvider;
   private apiKey: string;
   private baseUrl: string;
   private model: string;
+  private dimensions?: number;
+  private readonly maxRetryAttempts = 5;
+  private readonly baseRetryDelayMs = 1000;
 
   constructor(env: Env) {
-    this.apiKey = env.LLM_API_KEY || "";
-    /**
-     * IMPORTANT:
-     * Our MongoDB Atlas vector index is configured for 768 dimensions, and the stored product embeddings were generated
-     * using Gemini's `gemini-embedding-001` (768 dims).
-     *
-     * If the runtime query embedding model produces a different dimension (e.g. 3072), Atlas will error and we'll
-     * end up in the (misleading) text-search fallback. To keep the system consistent, we force the query embedding
-     * model/provider here.
-     */
-    this.baseUrl = "https://generativelanguage.googleapis.com";
-    this.model = "gemini-embedding-001";
+    this.provider = env.EMBEDDING_PROVIDER;
+    this.apiKey = env.EMBEDDING_API_KEY || env.LLM_API_KEY || "";
+    this.model = env.EMBEDDING_MODEL;
+    this.dimensions = env.EMBEDDING_DIMENSIONS;
+    this.baseUrl = env.EMBEDDING_BASE_URL || this.defaultBaseUrl(this.provider);
   }
 
-  /**
-   * Generate embedding for a single text
-   */
   async generateEmbedding(text: string): Promise<number[]> {
     if (!this.apiKey) {
-      throw new Error("LLM_API_KEY not configured for embeddings");
+      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/LLM_API_KEY)");
     }
 
     try {
-      // Check if using Gemini API
-      const isGemini = this.baseUrl.includes("generativelanguage.googleapis.com");
-      
-      if (isGemini) {
-        // Gemini uses a different endpoint structure
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${this.apiKey}`;
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            content: {
-              parts: [{ text }]
-            }
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Gemini Embedding API error (${response.status}): ${errorText}`);
+      return await this.withRetryOnQuota(async () => {
+        if (this.provider === "gemini") {
+          return this.generateGeminiEmbedding(text);
         }
-
-        const data: any = await response.json();
-        return data.embedding.values as number[];
-      } else {
-        // OpenAI-compatible API
-        const response = await fetch(`${this.baseUrl}/embeddings`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: this.model,
-            input: text,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Embedding API error (${response.status}): ${errorText}`);
-        }
-
-        const data: any = await response.json();
-        return data.data[0].embedding as number[];
-      }
+        return this.generateOpenAiEmbedding(text);
+      });
     } catch (error) {
       console.error("Embedding generation failed:", error);
       throw error;
     }
   }
 
-  /**
-   * Generate embeddings for multiple texts in batch
-   * More efficient for indexing products
-   */
   async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
     if (!this.apiKey) {
-      throw new Error("LLM_API_KEY not configured for embeddings");
+      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/LLM_API_KEY)");
     }
-
-    if (texts.length === 0) {
-      return [];
-    }
+    if (texts.length === 0) return [];
 
     try {
-      // Check if using Gemini API
-      const isGemini = this.baseUrl.includes("generativelanguage.googleapis.com");
-      
-      if (isGemini) {
-        // Gemini doesn't support batch embeddings in a single call
-        // We need to make individual requests
-        const embeddings: number[][] = [];
-        for (const text of texts) {
-          const embedding = await this.generateEmbedding(text);
-          embeddings.push(embedding);
+      return await this.withRetryOnQuota(async () => {
+        if (this.provider === "gemini") {
+          const out: number[][] = [];
+          for (const text of texts) out.push(await this.generateGeminiEmbedding(text));
+          return out;
         }
-        return embeddings;
-      } else {
-        // OpenAI-compatible API supports batch
-        const response = await fetch(`${this.baseUrl}/embeddings`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: this.model,
-            input: texts,
-          }),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Batch embedding API error (${response.status}): ${errorText}`);
-        }
-
-        const data: any = await response.json();
-        return data.data.map((item: any) => item.embedding as number[]);
-      }
+        return this.generateOpenAiBatchEmbeddings(texts);
+      });
     } catch (error) {
       console.error("Batch embedding generation failed:", error);
       throw error;
     }
+  }
+
+  private defaultBaseUrl(provider: EmbeddingProvider): string {
+    return provider === "gemini"
+      ? "https://generativelanguage.googleapis.com"
+      : "https://api.openai.com/v1";
+  }
+
+  private async generateGeminiEmbedding(text: string): Promise<number[]> {
+    const modelName = this.model.startsWith("models/") ? this.model.slice("models/".length) : this.model;
+    const url = `${this.baseUrl}/v1beta/models/${modelName}:embedContent?key=${this.apiKey}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini Embedding API error (${response.status}): ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    return data.embedding.values as number[];
+  }
+
+  private async generateOpenAiEmbedding(text: string): Promise<number[]> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: text,
+    };
+    if (this.dimensions && this.model.startsWith("text-embedding-3")) {
+      body.dimensions = this.dimensions;
+    }
+
+    const response = await fetch(`${this.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI Embedding API error (${response.status}): ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    return data.data[0].embedding as number[];
+  }
+
+  private async generateOpenAiBatchEmbeddings(texts: string[]): Promise<number[][]> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: texts,
+    };
+    if (this.dimensions && this.model.startsWith("text-embedding-3")) {
+      body.dimensions = this.dimensions;
+    }
+
+    const response = await fetch(`${this.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI Batch Embedding API error (${response.status}): ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    return data.data.map((item: any) => item.embedding as number[]);
+  }
+
+  private async withRetryOnQuota<T>(fn: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (attempt < this.maxRetryAttempts) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        const canRetry = this.isRateLimitOrQuotaError(error);
+        if (!canRetry || attempt === this.maxRetryAttempts - 1) break;
+        await this.sleep(this.baseRetryDelayMs * 2 ** attempt);
+        attempt += 1;
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("Embedding request failed");
+  }
+
+  private isRateLimitOrQuotaError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error || "");
+    return (
+      message.includes("(429)") ||
+      message.includes("RESOURCE_EXHAUSTED") ||
+      message.includes("quota") ||
+      message.includes("rate limit")
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

@@ -124,7 +124,11 @@ export const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   LLM_BASE_URL: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
+  EMBEDDING_PROVIDER: z.enum(["gemini", "openai"]).default("gemini"),
+  EMBEDDING_BASE_URL: z.string().optional(),
+  EMBEDDING_API_KEY: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-004"),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().optional(),
   NER_ENABLED: z.coerce.boolean().default(true),
   // NOTE: This must be a full Gemini model name for v1beta (e.g. "models/gemini-2.0-flash-lite")
   NER_MODEL: z.string().default("models/gemini-2.0-flash-lite"),

@@ -1,9 +1,97 @@
 import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
 import { SearchQuerySchema } from "../types/index.js";
 import type { SearchService } from "../services/searchService.js";
+import type { ProductExplanationService } from "../services/productExplanationService.js";
+import type { BoostRuleService } from "../services/boostRuleService.js";
+import type { ProductCatalogService } from "../services/productCatalogService.js";
+import type { AcademyChatService } from "../services/academyChatService.js";
+import type { AcademyMetricsService } from "../services/academyMetricsService.js";
 import { getMerchantId } from "../middleware/auth.js";
 
-export function createSearchRoutes(searchService: SearchService): FastifyPluginAsync {
+const ExplainRequestSchema = z.object({
+  query: z.string().min(1).max(500),
+  products: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        description: z.string().optional(),
+        color: z.string().optional(),
+        country: z.string().optional(),
+        grapes: z.array(z.string()).optional(),
+      })
+    )
+    .min(1)
+    .max(12),
+});
+
+const BoostRuleCreateSchema = z.object({
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  triggerQuery: z.string().min(1).max(500),
+  matchMode: z.enum(["contains", "exact"]).default("contains"),
+  boostPercent: z.number().min(0).max(200).default(25),
+  pinToTop: z.boolean().default(false),
+  active: z.boolean().default(true),
+  startAt: z.string().datetime().optional(),
+  endAt: z.string().datetime().optional(),
+});
+
+const BoostRuleUpdateSchema = z.object({
+  triggerQuery: z.string().min(1).max(500).optional(),
+  matchMode: z.enum(["contains", "exact"]).optional(),
+  boostPercent: z.number().min(0).max(200).optional(),
+  pinToTop: z.boolean().optional(),
+  active: z.boolean().optional(),
+  startAt: z.string().datetime().optional(),
+  endAt: z.string().datetime().optional(),
+});
+
+const AcademyChatSchema = z.object({
+  question: z.string().min(2).max(1200),
+});
+
+const AcademySearchEventSchema = z.object({
+  question: z.string().min(2).max(1200),
+  userId: z.string().min(1).max(120).optional(),
+  resultProductIds: z.array(z.string().min(1)).max(40).default([]),
+  selectedProductIds: z.array(z.string().min(1)).max(40).default([]),
+  ts: z.string().datetime().optional(),
+});
+
+const AcademyClickEventSchema = z.object({
+  productId: z.string().min(1),
+  query: z.string().max(1200).optional(),
+  userId: z.string().min(1).max(120).optional(),
+  ts: z.string().datetime().optional(),
+});
+
+const AcademyOrderEventSchema = z.object({
+  productId: z.string().min(1),
+  quantity: z.number().int().positive().max(100).default(1),
+  amount: z.number().min(0).optional(),
+  userId: z.string().min(1).max(120).optional(),
+  ts: z.string().datetime().optional(),
+});
+
+const AcademyRecomputeSchema = z.object({
+  weekStart: z.string().datetime().optional(),
+});
+
+const AcademyPopularQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(30).default(5),
+  weekStart: z.string().datetime().optional(),
+});
+
+export function createSearchRoutes(
+  searchService: SearchService,
+  productExplanationService: ProductExplanationService,
+  boostRuleService: BoostRuleService,
+  productCatalogService: ProductCatalogService,
+  academyChatService: AcademyChatService,
+  academyMetricsService: AcademyMetricsService
+): FastifyPluginAsync {
   return async (server) => {
     /**
      * POST /search
@@ -45,6 +133,238 @@ export function createSearchRoutes(searchService: SearchService): FastifyPluginA
           message: error instanceof Error ? error.message : "Unknown error",
         });
       }
+    });
+
+    /**
+     * POST /search/explain
+     * Generate short explanation text for why returned products fit the query
+     */
+    server.post("/search/explain", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const body = request.body as any;
+      const parsed = ExplainRequestSchema.safeParse(body);
+
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const result = await productExplanationService.explain(
+          parsed.data.query,
+          parsed.data.products
+        );
+        return reply.send(result);
+      } catch (error) {
+        server.log.error({ error, merchantId }, "Explanation generation failed");
+        return reply.status(500).send({
+          error: "explain_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/academy/chat", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademyChatSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const result = await academyChatService.ask(parsed.data.question);
+        return reply.send(result);
+      } catch (error) {
+        server.log.error({ error }, "Academy chat failed");
+        return reply.status(500).send({
+          error: "academy_chat_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/academy/events/search", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademySearchEventSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        await academyMetricsService.trackSearch(parsed.data);
+        return reply.status(202).send({ ok: true });
+      } catch (error) {
+        server.log.error({ error }, "Academy search event failed");
+        return reply.status(500).send({
+          error: "academy_event_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/academy/events/click", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademyClickEventSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        await academyMetricsService.trackClick(parsed.data);
+        return reply.status(202).send({ ok: true });
+      } catch (error) {
+        server.log.error({ error }, "Academy click event failed");
+        return reply.status(500).send({
+          error: "academy_event_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/academy/events/order", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademyOrderEventSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        await academyMetricsService.trackOrder(parsed.data);
+        return reply.status(202).send({ ok: true });
+      } catch (error) {
+        server.log.error({ error }, "Academy order event failed");
+        return reply.status(500).send({
+          error: "academy_event_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/academy/metrics/recompute-weekly", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademyRecomputeSchema.safeParse(request.body || {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const result = await academyMetricsService.recomputeWeekly(parsed.data.weekStart);
+        return reply.send({ ok: true, ...result });
+      } catch (error) {
+        server.log.error({ error }, "Academy recompute failed");
+        return reply.status(500).send({
+          error: "academy_metrics_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.get("/academy/metrics/popular-week", async (request, reply) => {
+      getMerchantId(request);
+      const parsed = AcademyPopularQuerySchema.safeParse(request.query || {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const products = await academyMetricsService.getPopularWeek(
+          parsed.data.limit,
+          parsed.data.weekStart
+        );
+        return reply.send({
+          weekStart: parsed.data.weekStart,
+          products,
+        });
+      } catch (error) {
+        server.log.error({ error }, "Academy popular-week failed");
+        return reply.status(500).send({
+          error: "academy_metrics_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.get("/products/by-name", async (request, reply) => {
+      getMerchantId(request);
+      const query = (request.query as any)?.q;
+      const limitRaw = (request.query as any)?.limit;
+      const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 20;
+
+      if (!query || typeof query !== "string" || !query.trim()) {
+        return reply.status(400).send({ error: "invalid_request", message: "Missing query param q" });
+      }
+
+      const products = await productCatalogService.searchByName(query, limit);
+      return reply.send({ products });
+    });
+
+    server.get("/boost-rules", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const rules = await boostRuleService.list(merchantId);
+      return reply.send({ rules });
+    });
+
+    server.post("/boost-rules", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const parsed = BoostRuleCreateSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      const created = await boostRuleService.create(merchantId, parsed.data);
+      return reply.status(201).send(created);
+    });
+
+    server.put("/boost-rules/:id", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const params = request.params as { id?: string };
+      if (!params?.id) {
+        return reply.status(400).send({ error: "invalid_request", message: "Missing id" });
+      }
+
+      const parsed = BoostRuleUpdateSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      const updated = await boostRuleService.update(merchantId, params.id, parsed.data);
+      if (!updated) {
+        return reply.status(404).send({ error: "not_found" });
+      }
+      return reply.send(updated);
+    });
+
+    server.delete("/boost-rules/:id", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const params = request.params as { id?: string };
+      if (!params?.id) {
+        return reply.status(400).send({ error: "invalid_request", message: "Missing id" });
+      }
+      const deleted = await boostRuleService.delete(merchantId, params.id);
+      if (!deleted) {
+        return reply.status(404).send({ error: "not_found" });
+      }
+      return reply.status(204).send();
     });
 
     /**

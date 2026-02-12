@@ -4,6 +4,8 @@ import { fetchInsights, generateReport, groupByType, type Insight } from "./api/
 import { InsightCard } from "./components/InsightCard";
 import { SectionHeader } from "./components/SectionHeader";
 import { SearchDemo } from "./components/SearchDemo";
+import { ProductsBoost } from "./components/ProductsBoost";
+import { AcademyChat } from "./components/AcademyChat";
 
 const SECTION_ORDER = ["PROMOTE_THIS_THEME", "FIX_THIS_ISSUE", "TALK_ABOUT_THIS"];
 
@@ -81,6 +83,18 @@ function InsightsPage() {
               className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all bg-purple-600 text-white hover:bg-purple-700 active:scale-[0.97] shadow-sm"
             >
               🍷 Search Demo
+            </Link>
+            <Link
+              to="/products-boost"
+              className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all bg-geffen-600 text-white hover:bg-geffen-700 active:scale-[0.97] shadow-sm"
+            >
+              Products Boost
+            </Link>
+            <Link
+              to="/academy"
+              className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all bg-slate-900 text-white hover:bg-slate-700 active:scale-[0.97] shadow-sm"
+            >
+              Academy
             </Link>
             <button
               onClick={handleGenerate}
@@ -171,6 +185,8 @@ function App() {
     <Routes>
       <Route path="/" element={<InsightsPage />} />
       <Route path="/search-demo" element={<SearchDemo onBack={() => window.history.back()} />} />
+      <Route path="/products-boost" element={<ProductsBoost onBack={() => window.history.back()} />} />
+      <Route path="/academy" element={<AcademyChat onBack={() => window.history.back()} />} />
     </Routes>
   );
 }

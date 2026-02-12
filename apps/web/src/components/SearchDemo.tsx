@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import { useState } from "react";
 
 interface WineProduct {
   _id: string;
@@ -47,6 +48,34 @@ interface SearchDemoProps {
   onBack?: () => void;
 }
 
+interface ExplanationResponse {
+  intro: string;
+  reasons: Array<{ id: string; reason: string }>;
+}
+
+const colorTone: Record<string, string> = {
+  red: "bg-rose-500",
+  white: "bg-amber-200",
+  "rosé": "bg-pink-300",
+  sparkling: "bg-geffen-200",
+};
+
+function toPlainText(value?: string): string {
+  if (!value) return "";
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatIls(value: number): string {
+  return new Intl.NumberFormat("he-IL", {
+    style: "currency",
+    currency: "ILS",
+    maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
+  }).format(value);
+}
+
 export function SearchDemo({ onBack }: SearchDemoProps) {
   const [query, setQuery] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
@@ -54,16 +83,16 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const [kosher, setKosher] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<SearchResponse | null>(null);
+  const [reasonsById, setReasonsById] = useState<Record<string, string>>({});
+  const [explanationIntro, setExplanationIntro] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
-  // Dynamically determine API_URL based on the current hostname
-  const API_URL = "https://geffen.onrender.com";
-  const API_KEY = "test_key_store_a";
+  const API_URL = import.meta.env.VITE_SEARCH_API_URL || "https://geffen.onrender.com";
+  const API_KEY = import.meta.env.VITE_SEARCH_API_KEY || "test_key_store_a";
+  const MERCHANT_ID = import.meta.env.VITE_SEARCH_MERCHANT_ID || "store_a";
 
   const handleSearch = async () => {
-    console.log("handleSearch called", { query: query.trim(), maxPrice, selectedColors, kosher });
     if (!query.trim()) {
-      console.log("Query is empty, returning.");
       return;
     }
 
@@ -79,11 +108,11 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
         },
         body: JSON.stringify({
           query: query.trim(),
-          merchantId: "store_a",
+          merchantId: MERCHANT_ID,
           limit: 12,
-          maxPrice: maxPrice ? parseInt(maxPrice) : undefined,
+          maxPrice: maxPrice ? parseInt(maxPrice, 10) : undefined,
           colors: selectedColors.length > 0 ? selectedColors : undefined,
-          kosher: kosher,
+          kosher,
         }),
       });
 
@@ -93,10 +122,44 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
       }
 
       const data: SearchResponse = await response.json();
-      console.log("API Response Data:", data); // Log the response data
       setResults(data);
+      setReasonsById({});
+      setExplanationIntro("");
+
+      if (data.products.length > 0) {
+        try {
+          const explainResponse = await fetch(`${API_URL}/search/explain`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": API_KEY,
+            },
+            body: JSON.stringify({
+              query: query.trim(),
+              products: data.products.slice(0, 8).map((p) => ({
+                id: p._id,
+                name: p.name,
+                description: p.description,
+                color: p.color,
+                country: p.country,
+                grapes: p.grapes,
+              })),
+            }),
+          });
+
+          if (explainResponse.ok) {
+            const explainData: ExplanationResponse = await explainResponse.json();
+            const mapped = Object.fromEntries(
+              explainData.reasons.map((r) => [r.id, r.reason])
+            ) as Record<string, string>;
+            setReasonsById(mapped);
+            setExplanationIntro(explainData.intro || "");
+          }
+        } catch {
+          // Keep search usable even if explanation generation fails.
+        }
+      }
     } catch (err) {
-      console.error("Search API Error:", err); // More detailed error log
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
     } finally {
@@ -113,120 +176,126 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const colors = ["red", "white", "rosé", "sparkling"];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-pink-50">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-lg border-b border-gray-200/50 sticky top-0 z-30 shadow-sm">
-        <div className="px-6 lg:px-10 py-4 max-w-[1400px] mx-auto">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
-                <span className="text-white text-xl">🍷</span>
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-gray-900">Wine Search Demo</h1>
-                <p className="text-xs text-gray-500">Semantic search powered by AI</p>
-              </div>
+    <div className="min-h-screen bg-[#fffdfd] text-slate-900">
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -top-40 right-[-120px] h-[420px] w-[420px] rounded-full bg-geffen-100 blur-3xl" />
+        <div className="absolute bottom-[-180px] left-[-140px] h-[380px] w-[380px] rounded-full bg-geffen-200/70 blur-3xl" />
+      </div>
+
+      <header className="sticky top-0 z-30 border-b border-geffen-100 bg-white/95 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-4 lg:px-10">
+          <div className="flex items-center gap-4">
+            <div className="rounded-xl border border-geffen-100 bg-white px-3 py-2 shadow-sm">
+              <img src="/logo.png" alt="Geffen" className="h-5 w-auto" />
             </div>
+            <div>
+              <h1 className="text-sm font-semibold tracking-[0.2em] text-geffen-700">SEARCH DEMO</h1>
+              <p className="text-xs text-slate-500">Minimal semantic wine retrieval</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Link
+              to="/products-boost"
+              className="rounded-full border border-geffen-600 bg-geffen-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-geffen-700"
+            >
+              Products Boost
+            </Link>
             <button
               onClick={onBack}
-              className="text-sm text-gray-600 hover:text-gray-900 font-medium"
+              className="rounded-full border border-geffen-200 px-4 py-2 text-xs font-semibold text-geffen-700 transition hover:border-geffen-400 hover:bg-geffen-50"
             >
-              ← Back to Insights
+              Back to Insights
             </button>
           </div>
         </div>
       </header>
 
-      <main className="px-6 lg:px-10 py-8 max-w-[1400px] mx-auto">
-        {/* Search Section */}
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-200/50 p-8 mb-8">
-          <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              🔍 Search for wines
+      <main className="relative mx-auto max-w-[1400px] px-6 py-8 lg:px-10">
+        <section className="mb-8 rounded-2xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
+          <div className="mb-5">
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-geffen-700">
+              Query
             </label>
-            <div className="flex gap-3">
+            <div className="flex flex-col gap-3 md:flex-row">
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="Try: 'fruity red wine from france' or 'יין לבן יבש'"
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-sm"
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                placeholder="fruity red from france or יין לבן יבש"
+                className="h-11 flex-1 rounded-xl border border-geffen-200 bg-white px-4 text-sm text-slate-800 placeholder:text-slate-400 outline-none ring-geffen-200 transition focus:border-geffen-400 focus:ring-2"
               />
               <button
                 onClick={handleSearch}
                 disabled={loading || !query.trim()}
-                className={`px-8 py-3 rounded-xl font-semibold text-sm transition-all ${
+                className={`h-11 rounded-xl px-7 text-sm font-semibold transition ${
                   loading || !query.trim()
-                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                    : "bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:shadow-lg hover:scale-105 active:scale-95"
+                    ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                    : "border border-geffen-600 bg-geffen-600 text-white hover:bg-geffen-700"
                 }`}
               >
-                {loading ? "Searching..." : "Search"}
+                {loading ? "Searching..." : "Run Search"}
               </button>
             </div>
           </div>
 
-          {/* Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Colors */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-2">
-                Wine Color
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                Color
               </label>
               <div className="flex flex-wrap gap-2">
                 {colors.map((color) => (
                   <button
                     key={color}
                     onClick={() => toggleColor(color)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium capitalize transition ${
                       selectedColors.includes(color)
-                        ? "bg-purple-600 text-white shadow-md"
-                        : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        ? "border-geffen-600 bg-geffen-600 text-white"
+                        : "border-geffen-200 bg-white text-geffen-700 hover:border-geffen-400"
                     }`}
                   >
-                    {color.charAt(0).toUpperCase() + color.slice(1)}
+                    {color}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Price */}
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-2">
-                Max Price ($)
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                מחיר מקסימלי (₪)
               </label>
               <input
                 type="number"
                 value={maxPrice}
                 onChange={(e) => setMaxPrice(e.target.value)}
-                placeholder="e.g., 50"
-                className="w-full px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
+                placeholder="200"
+                className="h-9 w-full rounded-lg border border-geffen-200 bg-white px-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none ring-geffen-200 transition focus:border-geffen-400 focus:ring-2"
               />
             </div>
 
-            {/* Kosher */}
             <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-2">
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
                 Kosher
               </label>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setKosher(true)}
-                  className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                     kosher === true
-                      ? "bg-purple-600 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                      ? "border-geffen-600 bg-geffen-600 text-white"
+                      : "border-geffen-200 bg-white text-geffen-700 hover:border-geffen-400"
                   }`}
                 >
                   Yes
                 </button>
                 <button
                   onClick={() => setKosher(undefined)}
-                  className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
                     kosher === undefined
-                      ? "bg-purple-600 text-white"
-                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                      ? "border-geffen-600 bg-geffen-600 text-white"
+                      : "border-geffen-200 bg-white text-geffen-700 hover:border-geffen-400"
                   }`}
                 >
                   Any
@@ -234,192 +303,184 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Error */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-8">
-            <p className="text-red-800 text-sm">
+          <div className="mb-8 rounded-xl border border-red-300 bg-red-50 p-4">
+            <p className="text-sm text-red-800">
               <strong>Error:</strong> {error}
             </p>
-            <p className="text-red-600 text-xs mt-1">
-              Make sure the Search API is running on localhost:3000
-            </p>
+            <p className="mt-1 text-xs text-red-600">Check Search API availability and credentials.</p>
           </div>
         )}
 
-        {/* Results */}
         {results && (
           <>
-            {/* Metadata */}
-            <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-6 mb-8 border border-purple-200/50">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs text-gray-500 mb-1">Total Results</p>
-                  <p className="text-2xl font-bold text-purple-600">
-                    {results.metadata.totalResults}
-                  </p>
+            <section className="mb-8 rounded-2xl border border-geffen-100 bg-white p-4 shadow-xl shadow-geffen-100/30">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="rounded-xl border border-geffen-100 bg-geffen-50 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Results</p>
+                  <p className="text-2xl font-semibold text-geffen-700">{results.metadata.totalResults}</p>
                 </div>
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs text-gray-500 mb-1">Parsing</p>
-                  <p className="text-2xl font-bold text-green-600">
-                    {results.metadata.timings.parsing}ms
-                  </p>
+                <div className="rounded-xl border border-geffen-100 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Parsing</p>
+                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.parsing}ms</p>
                 </div>
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs text-gray-500 mb-1">Embedding</p>
-                  <p className="text-2xl font-bold text-blue-600">
-                    {results.metadata.timings.embedding}ms
-                  </p>
+                <div className="rounded-xl border border-geffen-100 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Embedding</p>
+                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.embedding}ms</p>
                 </div>
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs text-gray-500 mb-1">Vector Search</p>
-                  <p className="text-2xl font-bold text-orange-600">
-                    {results.metadata.timings.vectorSearch}ms
-                  </p>
+                <div className="rounded-xl border border-geffen-100 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Vector</p>
+                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.vectorSearch}ms</p>
                 </div>
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs text-gray-500 mb-1">Total Time</p>
-                  <p className="text-2xl font-bold text-pink-600">
-                    {results.metadata.timings.total}ms
-                  </p>
+                <div className="rounded-xl border border-geffen-200 bg-geffen-50 p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Total</p>
+                  <p className="text-2xl font-semibold text-geffen-700">{results.metadata.timings.total}ms</p>
                 </div>
               </div>
 
-              {/* Applied Filters */}
               {Object.keys(results.metadata.appliedFilters).length > 0 && (
-                <div className="bg-white rounded-lg p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-gray-600 mb-2">
-                    Applied Filters:
+                <div className="mt-4 rounded-xl border border-geffen-100 bg-geffen-50/60 p-3">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                    Active Filters
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {results.metadata.appliedFilters.colors?.map((c) => (
                       <span
                         key={c}
-                        className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs font-medium"
+                        className="rounded-full border border-geffen-300 bg-white px-2.5 py-1 text-xs text-geffen-700"
                       >
-                        Color: {c}
+                        color: {c}
                       </span>
                     ))}
                     {results.metadata.appliedFilters.countries?.map((c) => (
                       <span
                         key={c}
-                        className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium"
+                        className="rounded-full border border-geffen-200 bg-white px-2.5 py-1 text-xs text-slate-700"
                       >
-                        Country: {c}
+                        country: {c}
                       </span>
                     ))}
                     {results.metadata.appliedFilters.priceRange && (
-                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
-                        Price: ${results.metadata.appliedFilters.priceRange.min || 0} -{" "}
-                        ${results.metadata.appliedFilters.priceRange.max || "∞"}
+                      <span className="rounded-full border border-geffen-200 bg-white px-2.5 py-1 text-xs text-slate-700">
+                        מחיר: {formatIls(results.metadata.appliedFilters.priceRange.min || 0)} -{" "}
+                        {results.metadata.appliedFilters.priceRange.max
+                          ? formatIls(results.metadata.appliedFilters.priceRange.max)
+                          : "ללא תקרה"}
                       </span>
                     )}
                     {results.metadata.appliedFilters.kosher && (
-                      <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">
-                        Kosher
+                      <span className="rounded-full border border-geffen-200 bg-white px-2.5 py-1 text-xs text-slate-700">
+                        kosher
                       </span>
                     )}
                   </div>
                 </div>
               )}
-            </div>
+            </section>
 
-            {/* Products Grid */}
             {results.products.length === 0 ? (
-              <div className="text-center py-16">
-                <p className="text-gray-500 text-lg">No wines found</p>
-                <p className="text-gray-400 text-sm mt-2">
-                  Try a different search or adjust your filters
-                </p>
+              <div className="py-20 text-center">
+                <p className="text-lg text-slate-700">No wines found</p>
+                <p className="mt-2 text-sm text-slate-500">Try a broader query or remove filters</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {results.products.map((product) => (
-                  <div
+                  <article
                     key={product._id}
-                    className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all border border-gray-200/50 overflow-hidden group hover:scale-105"
+                    className="group overflow-hidden rounded-2xl border border-geffen-100 bg-white transition hover:border-geffen-300 hover:shadow-lg"
                   >
-                    {/* Image Placeholder */}
-                    <div className="h-40 bg-gradient-to-br from-purple-100 to-pink-100 flex items-center justify-center">
-                      <span className="text-6xl">🍷</span>
+                    <div className="relative flex h-44 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white">
+                      {product.imageUrl ? (
+                        <img
+                          src={product.imageUrl}
+                          alt={product.name}
+                          className="h-full w-full object-contain p-1 opacity-95 transition group-hover:opacity-100"
+                        />
+                      ) : (
+                        <div className="flex items-center gap-3 text-geffen-500">
+                          <div className={`h-3 w-3 rounded-full ${colorTone[product.color || ""] || "bg-geffen-400"}`} />
+                          <span className="text-xs uppercase tracking-[0.18em]">No Image</span>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Content */}
                     <div className="p-4">
-                      <h3 className="font-bold text-gray-900 mb-1 line-clamp-2 group-hover:text-purple-600 transition-colors">
-                        {product.name}
-                      </h3>
+                      <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
 
                       {product.description && (
-                        <p className="text-xs text-gray-500 mb-3 line-clamp-2">
-                          {product.description}
+                        <p className="mb-3 line-clamp-3 text-xs text-slate-500">
+                          {toPlainText(product.description)}
                         </p>
                       )}
 
-                      {/* Details */}
-                      <div className="space-y-1.5 mb-3">
+                      {reasonsById[product._id] && (
+                        <div className="mb-3 rounded-lg border border-geffen-200 bg-geffen-50 px-2.5 py-2">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                            למה זה מתאים לשאילתה
+                          </p>
+                          <p className="text-xs leading-5 text-geffen-800">{reasonsById[product._id]}</p>
+                        </div>
+                      )}
+
+                      <div className="mb-3 space-y-1 text-xs text-slate-500">
                         {product.color && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="w-3 h-3 rounded-full bg-gradient-to-r from-red-400 to-purple-400"></span>
-                            <span className="text-gray-600 capitalize">{product.color}</span>
-                          </div>
+                          <p>
+                            Color: <span className="capitalize text-slate-800">{product.color}</span>
+                          </p>
                         )}
                         {product.country && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span>🌍</span>
-                            <span className="text-gray-600 capitalize">{product.country}</span>
-                          </div>
+                          <p>
+                            Country: <span className="capitalize text-slate-800">{product.country}</span>
+                          </p>
                         )}
                         {product.grapes && product.grapes.length > 0 && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span>🍇</span>
-                            <span className="text-gray-600 capitalize">
-                              {product.grapes.slice(0, 2).join(", ")}
-                            </span>
-                          </div>
+                          <p>
+                            Grapes: <span className="capitalize text-slate-800">{product.grapes.slice(0, 2).join(", ")}</span>
+                          </p>
                         )}
                       </div>
 
-                      {/* Price & Score */}
-                      <div className="flex items-center justify-between pt-3 border-t border-gray-100">
-                        <div>
-                          <p className="text-2xl font-bold text-purple-600">
-                            ${product.price}
-                          </p>
-                        </div>
+                      <div className="flex items-end justify-between border-t border-geffen-100 pt-3">
+                        <p className="text-xl font-semibold text-geffen-700">{formatIls(product.price)}</p>
                         <div className="text-right">
-                          <p className="text-xs text-gray-400">Match Score</p>
-                          <p className="text-sm font-bold text-pink-600">
+                          <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match</p>
+                          <p className="text-sm font-semibold text-geffen-700">
                             {Math.round((product.finalScore || product.score) * 100)}%
                           </p>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  </article>
                 ))}
+              </section>
+            )}
+
+            {explanationIntro && (
+              <div className="mt-5 rounded-xl border border-geffen-200 bg-geffen-50/70 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                  סיכום התאמה (LLM)
+                </p>
+                <p className="mt-1 text-sm text-geffen-800">{explanationIntro}</p>
               </div>
             )}
           </>
         )}
 
-        {/* Initial State */}
         {!results && !error && !loading && (
-          <div className="text-center py-20">
-            <div className="text-8xl mb-6">🍷</div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-2">
-              Search for Wines
-            </h2>
-            <p className="text-gray-500">
-              Try searching for "red wine from france" or "יין לבן יבש"
-            </p>
-            <div className="mt-8 flex justify-center gap-3">
+          <section className="py-24 text-center">
+            <p className="mb-2 text-sm uppercase tracking-[0.18em] text-geffen-700">Geffen Search</p>
+            <h2 className="mb-3 text-2xl font-semibold text-slate-900">Ask in natural language</h2>
+            <p className="text-sm text-slate-500">Example: red wine from bordeaux under ₪220</p>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 md:flex-row">
               <button
                 onClick={() => {
                   setQuery("red wine from bordeaux");
                   setTimeout(handleSearch, 100);
                 }}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium text-gray-700"
+                className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-sm text-geffen-700 transition hover:border-geffen-400 hover:bg-geffen-50"
               >
                 Try: Bordeaux Red
               </button>
@@ -428,12 +489,12 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                   setQuery("יין לבן יבש");
                   setTimeout(handleSearch, 100);
                 }}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-medium text-gray-700"
+                className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-sm text-geffen-700 transition hover:border-geffen-400 hover:bg-geffen-50"
               >
                 Try: יין לבן יבש
               </button>
             </div>
-          </div>
+          </section>
         )}
       </main>
     </div>

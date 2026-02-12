@@ -4,6 +4,7 @@ import { EmbeddingService } from "./embeddingService.js";
 import { VectorSearchService } from "./vectorSearchService.js";
 import { Reranker } from "./reranker.js";
 import { EntityExtractionService } from "./entityExtractionService.js";
+import type { BoostRuleService } from "./boostRuleService.js";
 
 /**
  * Main search orchestrator
@@ -15,13 +16,15 @@ export class SearchService {
   private embeddingService: EmbeddingService;
   private vectorSearch: VectorSearchService;
   private reranker: Reranker;
+  private boostRuleService?: BoostRuleService;
 
-  constructor(env: Env) {
+  constructor(env: Env, boostRuleService?: BoostRuleService) {
     this.parser = new QueryParser();
     this.entityExtractor = new EntityExtractionService(env);
     this.embeddingService = new EmbeddingService(env);
     this.vectorSearch = new VectorSearchService(env);
     this.reranker = new Reranker();
+    this.boostRuleService = boostRuleService;
   }
 
   /**
@@ -298,8 +301,16 @@ export class SearchService {
         return /\bwine\b/i.test(name) || /\bwine\b/i.test(desc) || name.includes("יין") || desc.includes("יין");
       };
       const wineFilteredResults = boostedResults.filter(wineLike);
-      const candidatesForRerank =
+      let candidatesForRerank =
         wineFilteredResults.length > 0 ? wineFilteredResults : boostedResults;
+
+      if (this.boostRuleService) {
+        candidatesForRerank = await this.boostRuleService.applyBoosts(
+          query.merchantId,
+          query.query,
+          candidatesForRerank as any
+        );
+      }
 
       // 4. Rerank results
       const startReranking = Date.now();
