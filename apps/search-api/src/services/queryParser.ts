@@ -15,9 +15,9 @@ const PATTERNS = {
   
   // Countries
   countries: {
-    france: /\b(france|french|français|צרפת|צרפתי)\b/i,
-    italy: /\b(italy|italian|italiano|איטליה|איטלקי)\b/i,
-    spain: /\b(spain|spanish|español|ספרד|ספרדי)\b/i,
+    france: /(?:\b(france|french|français)\b|צרפת|צרפתי(?:ת|ים|ות)?)/i,
+    italy: /(?:\b(italy|italian|italiano)\b|איטליה|איטלקי(?:ת|ים|ות)?)/i,
+    spain: /(?:\b(spain|spanish|español)\b|ספרד|ספרדי(?:ת|ים|ות)?)/i,
     usa: /\b(usa|america|california|oregon|washington|ארה"ב|אמריק)\b/i,
     argentina: /\b(argentina|argentinian|ארגנטינה)\b/i,
     chile: /\b(chile|chilean|צ'ילה)\b/i,
@@ -71,6 +71,16 @@ const PATTERNS = {
     tequila: /(?:\b(tequila)\b|טקילה)/i,
     brandy: /(?:\b(brandy)\b|ברנדי|קוניאק)/i,
     soda: /(?:\b(soda|soft\s*drink)\b|משקאות\s*קלים)/i,
+  },
+
+  // Soft intent tags (food pairing / context)
+  softTags: {
+    "italian food": /(?:\b(italian\s*food|italian\s*cuisine)\b|אוכל\s*איטלקי|ארוחה\s*איטלקית|לאוכל\s*איטלקי)/i,
+    pizza: /(?:\b(pizza)\b|ל?פיצ(?:ה|ות))/i,
+    fish: /(?:\b(fish|seafood)\b|ל?דג(?:ים)?|פירות\s*ים)/i,
+    meat: /(?:\b(meat|beef|steak)\b|ל?בשר)/i,
+    cheese: /(?:\b(cheese)\b|ל?גבינ(?:ה|ות))/i,
+    pasta: /(?:\b(pasta)\b|ל?פסט(?:ה|ות))/i,
   },
   
   // Price patterns
@@ -135,6 +145,12 @@ export class QueryParser {
     .map(([cat]) => cat);
   if (type.length > 0) filters.type = type;
 
+  // Extract soft intent tags
+  const softTags = Object.entries(PATTERNS.softTags)
+    .filter(([_, pattern]) => pattern.test(query))
+    .map(([tag]) => tag);
+  if (softTags.length > 0) filters.softTags = softTags;
+
   // Hard color category already captured above
 
     // Extract price range
@@ -192,6 +208,19 @@ export class QueryParser {
    */
   cleanQuery(query: string, filters: ExtractedFilters): string {
     let cleaned = query;
+
+    // Normalize common Hebrew phrasing so semantically equivalent queries
+    // collapse to similar embeddings (e.g., "לאוכל איטלקי" vs "לארוחה איטלקית").
+    cleaned = cleaned
+      .replace(/[\u0591-\u05C7]/g, "")
+      .replace(/ש?מתאי(?:ם|מה|מות|מים)?/g, " ")
+      .replace(/ל?ארוח(?:ה|ות)/g, " אוכל ")
+      .replace(/ל?מאכל(?:ים)?/g, " אוכל ")
+      .replace(/איטלקי(?:ת|ות)/g, " איטלקי ")
+      .replace(/ל?פיצ(?:ה|ות)/g, " פיצה ")
+      .replace(/ל?דג(?:ים)?/g, " דגים ")
+      .replace(/ל?גבינ(?:ה|ות)/g, " גבינות ")
+      .replace(/ל?בשר/g, " בשר ");
 
     // Remove price mentions
     cleaned = cleaned.replace(

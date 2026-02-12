@@ -59,7 +59,17 @@ export class SearchService {
       // 1. Parse query and extract filters
       const startParsing = Date.now();
       const ruleFilters = this.parser.parse(query.query);
-      const ner = await this.entityExtractor.extract(query.query);
+      const hasRuleHints =
+        Boolean(ruleFilters.type?.length) ||
+        Boolean(ruleFilters.category?.length) ||
+        Boolean(ruleFilters.countries?.length) ||
+        Boolean(ruleFilters.grapes?.length) ||
+        Boolean(ruleFilters.sweetness?.length) ||
+        Boolean(ruleFilters.kosher !== undefined) ||
+        Boolean(ruleFilters.priceRange?.min !== undefined || ruleFilters.priceRange?.max !== undefined);
+      const ner = hasRuleHints
+        ? ({ filters: {} as any, confidence: undefined, language: undefined } as const)
+        : await this.entityExtractor.extract(query.query);
 
       // Merge rule-based + NER filters (NER can add synonyms/morphology)
       const mergeUnique = (a?: string[], b?: string[]) =>
@@ -187,12 +197,10 @@ export class SearchService {
 
       const hardTypeCats = mapTypeToCategory(mergedFilters.type);
       const hardColorCats = mapColorToCategory(mergedFilters.category);
+      const hardCategorySet = new Set(hardColorCats.length > 0 ? hardColorCats : hardTypeCats);
 
-      if (hardColorCats.length > 0) {
-        preFilterObj.category = Array.from(new Set(hardColorCats));
-      } else if (hardTypeCats.length > 0) {
-        preFilterObj.category = Array.from(new Set(hardTypeCats));
-      }
+      // NOTE: We intentionally do not push parsed category/type into vector pre-filter.
+      // Atlas filter mappings can be brittle across catalog shapes; we enforce these as post-filters.
 
       // Use merged filters for cleaning so "אדום/ישראלי/יבש" doesn't dominate the embedding.
       const cleanedQuery = this.parser.cleanQuery(query.query, mergedFilters);
@@ -205,10 +213,23 @@ export class SearchService {
         preFilterObj,
         50
       );
-      const usedText = textResults.length > 0;
+      let usedText = textResults.length > 0;
       timings.vectorSearch = Date.now() - startTextSearch;
 
       let baseResults: any[] = textResults;
+
+      // Fast category fallback for mixed-intent queries when strict text search misses.
+      // This avoids unnecessary embedding calls and prevents zero-results on known categories.
+      if (!usedText && hardCategorySet.size > 0) {
+        const categoryFastFallback = await this.vectorSearch.fetchProductsByCategories(
+          Array.from(hardCategorySet),
+          50
+        );
+        if (categoryFastFallback.length > 0) {
+          baseResults = categoryFastFallback;
+          usedText = true;
+        }
+      }
 
       if (!usedText) {
         // 3. Semantic search
@@ -227,20 +248,37 @@ export class SearchService {
       }
 
       // Apply HARD filters again after retrieval to guarantee strictness
-      const hardCategorySet = new Set(hardColorCats.length > 0 ? hardColorCats : hardTypeCats);
-      const hardFilteredResults = baseResults.filter((p: any) => {
-        const productCategories = Array.isArray(p.category) ? p.category : [];
-        if (hardCategorySet.size > 0) {
-        const hasCategory = productCategories.some((c: string) => hardCategorySet.has(c));
-          if (!hasCategory) return false;
+      const applyHardCategoryFilter = (results: any[]) =>
+        results.filter((p: any) => {
+          const productCategories = Array.isArray(p.category)
+            ? p.category
+            : typeof p.category === "string"
+              ? [p.category]
+              : [];
+          if (hardCategorySet.size > 0) {
+            const hasCategory = productCategories.some((c: string) => hardCategorySet.has(c));
+            if (!hasCategory) return false;
+          }
+          if (mergedFilters.kosher !== undefined && p.kosher !== mergedFilters.kosher) return false;
+          if (mergedFilters.priceRange) {
+            if (mergedFilters.priceRange.min && p.price < mergedFilters.priceRange.min) return false;
+            if (mergedFilters.priceRange.max && p.price > mergedFilters.priceRange.max) return false;
+          }
+          return true;
+        });
+      let hardFilteredResults = applyHardCategoryFilter(baseResults);
+
+      // Semantic fallback for mixed-intent queries (e.g. "יין אדום לפיצה"):
+      // if vector path produced no results after hard filtering, fallback by explicit category fetch.
+      if (!usedText && hardFilteredResults.length === 0 && hardCategorySet.size > 0) {
+        const categoryFallbackResults = await this.vectorSearch.fetchProductsByCategories(
+          Array.from(hardCategorySet),
+          50
+        );
+        if (categoryFallbackResults.length > 0) {
+          hardFilteredResults = applyHardCategoryFilter(categoryFallbackResults as any[]);
         }
-        if (mergedFilters.kosher !== undefined && p.kosher !== mergedFilters.kosher) return false;
-        if (mergedFilters.priceRange) {
-          if (mergedFilters.priceRange.min && p.price < mergedFilters.priceRange.min) return false;
-          if (mergedFilters.priceRange.max && p.price > mergedFilters.priceRange.max) return false;
-        }
-        return true;
-      });
+      }
 
       // Soft tags boost (non-hard categories like pizza/Portugal/etc.)
       const mapSoftTags = (filters: any) => {
@@ -255,6 +293,19 @@ export class SearchService {
 
         // Map canonical values to Hebrew softCategory values (as seen in Mongo)
         const map = new Map<string, string[]>([
+          ["italian food", ["איטליה", "איטלקי", "פסטה", "פיצה"]],
+          ["italian cuisine", ["איטליה", "איטלקי", "פסטה", "פיצה"]],
+          ["pizza", ["פיצה", "מנות איטלקיות", "איטליה"]],
+          ["פיצה", ["פיצה", "מנות איטלקיות", "איטליה"]],
+          ["fish", ["דגים", "דג", "פירות ים"]],
+          ["seafood", ["דגים", "דג", "פירות ים"]],
+          ["דגים", ["דגים", "דג", "פירות ים"]],
+          ["meat", ["בשר"]],
+          ["בשר", ["בשר"]],
+          ["cheese", ["גבינות", "גבינה"]],
+          ["גבינות", ["גבינות", "גבינה"]],
+          ["pasta", ["פסטה", "מנות איטלקיות"]],
+          ["פסטה", ["פסטה", "מנות איטלקיות"]],
           ["portugal", ["פורטוגל"]],
           ["france", ["צרפת", "בורגון", "בורדו"]],
           ["italy", ["איטליה", "טוסקנה", "פיימונטה", "ונטו", "סיציליה"]],
@@ -332,7 +383,11 @@ export class SearchService {
 
       // 4. Rerank results
       const startReranking = Date.now();
-      let finalResults = this.reranker.rerank(candidatesForRerank, query.limit + query.offset);
+      // Keep the full candidate pool through reranking so boosted items don't get trimmed out
+      let finalResults = this.reranker.rerank(
+        candidatesForRerank,
+        Math.max(candidatesForRerank.length, query.limit + query.offset)
+      );
       finalResults = this.reranker.applyBusinessRules(finalResults);
       finalResults = this.applyPinnedOrdering(finalResults);
       timings.reranking = Date.now() - startReranking;
@@ -370,12 +425,20 @@ export class SearchService {
   private applyPinnedOrdering(results: any[]): any[] {
     if (results.length === 0) return results;
     const pinned = results.filter((p) => Boolean((p as any).promotedPin));
-    if (pinned.length === 0) return results;
+    const promoted = results.filter(
+      (p) => !Boolean((p as any).promotedPin) && Boolean((p as any).promoted)
+    );
+    if (pinned.length === 0 && promoted.length === 0) return results;
 
-    const notPinned = results.filter((p) => !(p as any).promotedPin);
-    const byScoreDesc = (a: any, b: any) => Number((b as any).finalScore || (b as any).score || 0) - Number((a as any).finalScore || (a as any).score || 0);
+    const rest = results.filter(
+      (p) => !(p as any).promotedPin && !(p as any).promoted
+    );
+    const byScoreDesc = (a: any, b: any) =>
+      Number((b as any).finalScore || (b as any).score || 0) -
+      Number((a as any).finalScore || (a as any).score || 0);
     pinned.sort(byScoreDesc);
-    notPinned.sort(byScoreDesc);
-    return [...pinned, ...notPinned];
+    promoted.sort(byScoreDesc);
+    rest.sort(byScoreDesc);
+    return [...pinned, ...promoted, ...rest];
   }
 }
