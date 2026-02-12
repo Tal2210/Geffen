@@ -198,6 +198,30 @@ export class SearchService {
       const hardTypeCats = mapTypeToCategory(mergedFilters.type);
       const hardColorCats = mapColorToCategory(mergedFilters.category);
       const hardCategorySet = new Set(hardColorCats.length > 0 ? hardColorCats : hardTypeCats);
+      const countryAliasMap: Record<string, string[]> = {
+        france: ["france", "french", "צרפת", "צרפתי", "צרפתית"],
+        italy: ["italy", "italian", "איטליה", "איטלקי", "איטלקית"],
+        spain: ["spain", "spanish", "ספרד", "ספרדי", "ספרדית"],
+        usa: ["usa", "united states", "america", "אמריקה", "ארהב", "ארצות הברית", "אמריקאי", "אמריקאית"],
+        argentina: ["argentina", "argentinian", "ארגנטינה", "ארגנטינאי", "ארגנטינאית"],
+        chile: ["chile", "chilean", "צ'ילה", "ציליאני", "ציליאנית"],
+        australia: ["australia", "australian", "אוסטרליה", "אוסטרלי", "אוסטרלית"],
+        germany: ["germany", "german", "גרמניה", "גרמני", "גרמנית"],
+        portugal: ["portugal", "portuguese", "פורטוגל", "פורטוגלי", "פורטוגלית"],
+        israel: ["israel", "israeli", "ישראל", "ישראלי", "ישראלית"],
+      };
+      const hardCountryAliases: string[] = Array.from(
+        new Set(
+          (mergedFilters.countries || [])
+            .flatMap((country: string) => {
+              const normalized = String(country || "").toLowerCase().trim();
+              if (!normalized) return [];
+              return countryAliasMap[normalized] || [normalized];
+            })
+            .map((v: string) => String(v).toLowerCase())
+            .filter(Boolean)
+        )
+      );
 
       // NOTE: We intentionally do not push parsed category/type into vector pre-filter.
       // Atlas filter mappings can be brittle across catalog shapes; we enforce these as post-filters.
@@ -248,16 +272,38 @@ export class SearchService {
       }
 
       // Apply HARD filters again after retrieval to guarantee strictness
-      const applyHardCategoryFilter = (results: any[]) =>
+      const applyHardConstraints = (results: any[]) =>
         results.filter((p: any) => {
           const productCategories = Array.isArray(p.category)
             ? p.category
             : typeof p.category === "string"
               ? [p.category]
               : [];
+          const productSoftCategories = Array.isArray(p.softCategory)
+            ? p.softCategory
+            : typeof p.softCategory === "string"
+              ? [p.softCategory]
+              : [];
           if (hardCategorySet.size > 0) {
             const hasCategory = productCategories.some((c: string) => hardCategorySet.has(c));
             if (!hasCategory) return false;
+          }
+          if (hardCountryAliases.length > 0) {
+            const candidateFields = [
+              ...(typeof p.country === "string" ? [p.country] : []),
+              ...(typeof p.region === "string" ? [p.region] : []),
+              ...productCategories,
+              ...productSoftCategories,
+              ...(typeof p.name === "string" ? [p.name] : []),
+              ...(typeof p.description === "string" ? [p.description] : []),
+              ...(typeof p.short_description === "string" ? [p.short_description] : []),
+            ]
+              .map((v) => String(v).toLowerCase())
+              .filter(Boolean);
+            const matchesCountry = candidateFields.some((fieldValue) =>
+              hardCountryAliases.some((alias) => fieldValue.includes(alias))
+            );
+            if (!matchesCountry) return false;
           }
           if (mergedFilters.kosher !== undefined && p.kosher !== mergedFilters.kosher) return false;
           if (mergedFilters.priceRange) {
@@ -266,7 +312,7 @@ export class SearchService {
           }
           return true;
         });
-      let hardFilteredResults = applyHardCategoryFilter(baseResults);
+      let hardFilteredResults = applyHardConstraints(baseResults);
 
       // Semantic fallback for mixed-intent queries (e.g. "יין אדום לפיצה"):
       // if vector path produced no results after hard filtering, fallback by explicit category fetch.
@@ -276,7 +322,7 @@ export class SearchService {
           50
         );
         if (categoryFallbackResults.length > 0) {
-          hardFilteredResults = applyHardCategoryFilter(categoryFallbackResults as any[]);
+          hardFilteredResults = applyHardConstraints(categoryFallbackResults as any[]);
         }
       }
 
@@ -379,6 +425,8 @@ export class SearchService {
           query.query,
           candidatesForRerank as any
         );
+        // Boosted products must still respect hard semantic constraints from parsing.
+        candidatesForRerank = applyHardConstraints(candidatesForRerank);
       }
 
       // 4. Rerank results
