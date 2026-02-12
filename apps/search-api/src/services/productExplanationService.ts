@@ -16,12 +16,17 @@ type ExplainOutput = {
 
 export class ProductExplanationService {
   private apiKey: string;
+  private baseUrl: string;
   private model: string;
   private enabled: boolean;
 
   constructor(env: Env) {
-    this.apiKey = env.LLM_API_KEY || "";
-    this.model = env.NER_MODEL || "models/gemini-2.0-flash-lite";
+    this.apiKey = env.LLM_API_KEY || env.OPENAI_API_KEY || "";
+    this.baseUrl = (env.LLM_BASE_URL || env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(
+      /\/$/,
+      "",
+    );
+    this.model = env.LLM_MODEL || env.NER_MODEL || "gpt-4.1-mini";
     this.enabled = Boolean(this.apiKey);
   }
 
@@ -38,9 +43,6 @@ export class ProductExplanationService {
     }
 
     try {
-      const modelPath = this.model.startsWith("models/") ? this.model : `models/${this.model}`;
-      const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${this.apiKey}`;
-
       const compactProducts = products.slice(0, 8).map((p) => ({
         id: p.id,
         name: p.name,
@@ -67,26 +69,31 @@ export class ProductExplanationService {
         `Products: ${JSON.stringify(compactProducts)}`,
       ].join("\n");
 
-      const res = await fetch(url, {
+      const res = await fetch(`${this.baseUrl}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-          },
+          model: this.model,
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: prompt }],
         }),
       });
 
       if (!res.ok) {
+        const errorBody = await res.text().catch(() => "");
+        console.error("[ProductExplanationService] LLM non-OK response", {
+          status: res.status,
+          body: errorBody.slice(0, 500),
+        });
         return this.fallback(query, products);
       }
 
       const data: any = await res.json();
-      const text: string | undefined =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-        data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).join("") ??
-        undefined;
+      const text: string | undefined = data?.choices?.[0]?.message?.content ?? undefined;
 
       if (!text) return this.fallback(query, products);
 
@@ -112,7 +119,11 @@ export class ProductExplanationService {
             : "המוצרים נבחרו לפי התאמה לשאילתה ולמאפייני היין.",
         reasons,
       };
-    } catch {
+    } catch (error) {
+      console.error(
+        "[ProductExplanationService] LLM request failed",
+        error instanceof Error ? error.message : error
+      );
       return this.fallback(query, products);
     }
   }
@@ -159,4 +170,3 @@ export class ProductExplanationService {
       .trim();
   }
 }
-

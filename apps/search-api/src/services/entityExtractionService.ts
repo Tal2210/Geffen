@@ -12,16 +12,21 @@ type NerResult = {
  * Returns structured filters (color/country/sweetness/grapes/price/kosher/regions)
  * without relying purely on regex rules.
  *
- * Uses Google Gemini REST API directly.
+ * Uses OpenAI-compatible chat completions.
  */
 export class EntityExtractionService {
   private apiKey: string;
+  private baseUrl: string;
   private model: string;
   private enabled: boolean;
 
   constructor(env: Env) {
-    this.apiKey = env.LLM_API_KEY || "";
-    this.model = env.NER_MODEL || "models/gemini-2.0-flash-lite";
+    this.apiKey = env.LLM_API_KEY || env.OPENAI_API_KEY || "";
+    this.baseUrl = (env.LLM_BASE_URL || env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(
+      /\/$/,
+      "",
+    );
+    this.model = env.LLM_MODEL || env.NER_MODEL || "gpt-4.1-mini";
     this.enabled = Boolean(env.NER_ENABLED) && Boolean(this.apiKey);
   }
 
@@ -40,9 +45,6 @@ export class EntityExtractionService {
     const t = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const modelPath = this.model.startsWith("models/") ? this.model : `models/${this.model}`;
-      const url = `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${this.apiKey}`;
-
       const prompt = [
         "You are an NER engine for a wine e-commerce search query.",
         "Extract structured filters from the query. Output ONLY valid JSON.",
@@ -83,28 +85,33 @@ export class EntityExtractionService {
         `Query: ${query}`,
       ].join("\n");
 
-      const res = await fetch(url, {
+      const res = await fetch(`${this.baseUrl}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0,
-          },
+          model: this.model,
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: prompt }],
         }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
+        const errorBody = await res.text().catch(() => "");
+        console.error("[EntityExtractionService] LLM non-OK response", {
+          status: res.status,
+          body: errorBody.slice(0, 500),
+        });
         // Fail open: no NER.
         return { filters: {} };
       }
 
       const data: any = await res.json();
-      const text: string | undefined =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-        data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).join("") ??
-        undefined;
+      const text: string | undefined = data?.choices?.[0]?.message?.content ?? undefined;
 
       if (!text) return { filters: {} };
 
@@ -119,7 +126,11 @@ export class EntityExtractionService {
         confidence: typeof parsed?.confidence === "number" ? parsed.confidence : undefined,
         language: parsed?.language,
       };
-    } catch {
+    } catch (error) {
+      console.error(
+        "[EntityExtractionService] LLM request failed",
+        error instanceof Error ? error.message : error
+      );
       return { filters: {} };
     } finally {
       clearTimeout(t);
@@ -148,4 +159,3 @@ export class EntityExtractionService {
     return s.slice(start, end + 1);
   }
 }
-
