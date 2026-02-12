@@ -128,23 +128,7 @@ export class BoostRuleService {
   ): Promise<VectorSearchHit[]> {
     if (products.length === 0) return products;
 
-    const now = new Date();
-    const rules = await this.collection
-      .find({ merchantId, active: true })
-      .sort({ updatedAt: -1 })
-      .toArray();
-
-    if (rules.length === 0) return products;
-
-    const normalizedQuery = query.trim().toLowerCase();
-    const relevantRules = rules.filter((rule) => {
-      if (!this.isRuleInWindow(rule, now)) return false;
-      const trigger = rule.triggerQuery.trim().toLowerCase();
-      if (!trigger) return false;
-      if (rule.matchMode === "exact") return normalizedQuery === trigger;
-      return normalizedQuery.includes(trigger);
-    });
-
+    const relevantRules = await this.getRelevantStoredRules(merchantId, query);
     if (relevantRules.length === 0) return products;
 
     const byProductId = new Map<string, StoredBoostRule[]>();
@@ -182,6 +166,33 @@ export class BoostRuleService {
     return [...pinned, ...rest];
   }
 
+  async getRelevantRules(merchantId: string, query: string): Promise<BoostRule[]> {
+    const rules = await this.getRelevantStoredRules(merchantId, query);
+    return rules.map(this.toPublicRule);
+  }
+
+  private async getRelevantStoredRules(
+    merchantId: string,
+    query: string
+  ): Promise<StoredBoostRule[]> {
+    const now = new Date();
+    const rules = await this.collection
+      .find({ merchantId, active: true })
+      .sort({ updatedAt: -1 })
+      .toArray();
+
+    if (rules.length === 0) return [];
+
+    const normalizedQuery = query.trim().toLowerCase();
+    return rules.filter((rule) => {
+      if (!this.isRuleInWindow(rule, now)) return false;
+      const trigger = rule.triggerQuery.trim().toLowerCase();
+      if (!trigger) return false;
+      if (rule.matchMode === "exact") return normalizedQuery === trigger;
+      return normalizedQuery.includes(trigger);
+    });
+  }
+
   private isRuleInWindow(rule: StoredBoostRule, now: Date): boolean {
     const start = rule.startAt ? new Date(rule.startAt) : null;
     const end = rule.endAt ? new Date(rule.endAt) : null;
@@ -205,4 +216,3 @@ export class BoostRuleService {
     };
   }
 }
-

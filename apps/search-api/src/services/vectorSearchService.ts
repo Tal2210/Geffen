@@ -1,4 +1,4 @@
-import { MongoClient, type Db, type Collection } from "mongodb";
+import { MongoClient, ObjectId, type Db, type Collection } from "mongodb";
 import type { ExtractedFilters, VectorSearchHit, Env } from "../types/index.js";
 
 /**
@@ -184,6 +184,64 @@ export class VectorSearchService {
         score: 1.0,
       };
     }) as VectorSearchHit[];
+  }
+
+  async fetchProductsByIds(productIds: string[]): Promise<VectorSearchHit[]> {
+    if (productIds.length === 0) return [];
+
+    const uniqueIds = Array.from(new Set(productIds.map((id) => String(id)).filter(Boolean)));
+    const objectIds = uniqueIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
+
+    const docs = await this.collection
+      .find({
+        $or: [{ _id: { $in: uniqueIds as any[] } }, { _id: { $in: objectIds as any[] } }],
+      })
+      .project({
+        _id: 1,
+        merchantId: 1,
+        name: 1,
+        description: 1,
+        price: 1,
+        currency: 1,
+        color: 1,
+        country: 1,
+        region: 1,
+        grapes: 1,
+        vintage: 1,
+        sweetness: 1,
+        kosher: 1,
+        alcohol: 1,
+        volume: 1,
+        imageUrl: 1,
+        image_url: 1,
+        image: 1,
+        images: 1,
+        featuredImage: 1,
+        featured_image: 1,
+        thumbnail: 1,
+        inStock: 1,
+        stockCount: 1,
+        rating: 1,
+        reviewCount: 1,
+        salesCount30d: 1,
+        viewCount30d: 1,
+        popularity: 1,
+        category: 1,
+        softCategory: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .toArray();
+
+    const byId = new Map(docs.map((d: any) => [String(d._id), d]));
+    return uniqueIds
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((doc: any) => ({
+        ...this.normalizeImageFields(doc),
+        _id: doc._id.toString(),
+        score: 0.0001,
+      })) as VectorSearchHit[];
   }
 
   /**
