@@ -305,6 +305,24 @@ export class SearchService {
         wineFilteredResults.length > 0 ? wineFilteredResults : boostedResults;
 
       if (this.boostRuleService) {
+        const relevantRules = await this.boostRuleService.getRelevantRules(
+          query.merchantId,
+          query.query
+        );
+        if (relevantRules.length > 0) {
+          const existingIds = new Set(candidatesForRerank.map((p: any) => String(p._id)));
+          const missingBoostedIds = relevantRules
+            .map((r) => r.productId)
+            .filter((id) => !existingIds.has(String(id)));
+
+          if (missingBoostedIds.length > 0) {
+            const injected = await this.vectorSearch.fetchProductsByIds(missingBoostedIds);
+            if (injected.length > 0) {
+              candidatesForRerank = [...candidatesForRerank, ...injected];
+            }
+          }
+        }
+
         candidatesForRerank = await this.boostRuleService.applyBoosts(
           query.merchantId,
           query.query,
@@ -316,6 +334,7 @@ export class SearchService {
       const startReranking = Date.now();
       let finalResults = this.reranker.rerank(candidatesForRerank, query.limit + query.offset);
       finalResults = this.reranker.applyBusinessRules(finalResults);
+      finalResults = this.applyPinnedOrdering(finalResults);
       timings.reranking = Date.now() - startReranking;
 
       timings.total = Date.now() - startTotal;
@@ -346,5 +365,17 @@ export class SearchService {
       console.error("Search failed:", error);
       throw error;
     }
+  }
+
+  private applyPinnedOrdering(results: any[]): any[] {
+    if (results.length === 0) return results;
+    const pinned = results.filter((p) => Boolean((p as any).promotedPin));
+    if (pinned.length === 0) return results;
+
+    const notPinned = results.filter((p) => !(p as any).promotedPin);
+    const byScoreDesc = (a: any, b: any) => Number((b as any).finalScore || (b as any).score || 0) - Number((a as any).finalScore || (a as any).score || 0);
+    pinned.sort(byScoreDesc);
+    notPinned.sort(byScoreDesc);
+    return [...pinned, ...notPinned];
   }
 }
