@@ -122,16 +122,19 @@ export const EnvSchema = z.object({
   MONGO_COLLECTION: z.string().default("bana.stores"),
   PORT: z.coerce.number().int().positive().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  OPENAI_BASE_URL: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   LLM_BASE_URL: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
-  EMBEDDING_PROVIDER: z.enum(["gemini", "openai"]).default("gemini"),
+  LLM_MODEL: z.string().default("gpt-4.1-mini"),
+  EMBEDDING_PROVIDER: z.enum(["gemini", "openai"]).default("openai"),
   EMBEDDING_BASE_URL: z.string().optional(),
   EMBEDDING_API_KEY: z.string().optional(),
-  EMBEDDING_MODEL: z.string().default("text-embedding-004"),
+  EMBEDDING_MODEL: z.string().default("text-embedding-3-large"),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().optional(),
   NER_ENABLED: z.coerce.boolean().default(true),
-  // NOTE: This must be a full Gemini model name for v1beta (e.g. "models/gemini-2.0-flash-lite")
-  NER_MODEL: z.string().default("models/gemini-2.0-flash-lite"),
+  // Optional override for NER/explanations. Defaults to LLM_MODEL.
+  NER_MODEL: z.string().optional(),
   CORS_ORIGIN: z.string().optional(),
 });
 
