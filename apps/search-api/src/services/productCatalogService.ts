@@ -40,15 +40,22 @@ export class ProductCatalogService {
 
     const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const terms = q.split(/\s+/).filter(Boolean);
-    const firstTerm = terms[0] || "";
-    const match =
-      terms.length === 1
-        ? { name: { $regex: escape(firstTerm), $options: "i" } }
-        : {
-            $and: terms.map((t) => ({
-              name: { $regex: escape(t), $options: "i" },
-            })),
-          };
+    
+    // Build a regex that matches ANY term (OR logic)
+    // This is better for natural language queries like "red wine for pasta"
+    const regex = terms.map(t => `(?=.*${escape(t)})`).join('');
+    const orConditions = terms.map(t => ({
+      $or: [
+        { name: { $regex: escape(t), $options: "i" } },
+        { description: { $regex: escape(t), $options: "i" } },
+        { category: { $regex: escape(t), $options: "i" } }
+      ]
+    }));
+
+    // Use OR so that matching any field works, and AND across terms for ranking quality
+    const match = orConditions.length > 0
+      ? { $and: orConditions }
+      : {};
 
     const docs = await this.collection
       .find(match)
@@ -86,7 +93,11 @@ export class ProductCatalogService {
       doc?.featured_image?.url ||
       doc?.featured_image?.src ||
       doc?.thumbnail ||
-      (Array.isArray(doc?.images) ? doc.images[0]?.url || doc.images[0]?.src : undefined);
+      (Array.isArray(doc?.images)
+        ? typeof doc.images[0] === "string"
+          ? doc.images[0]
+          : doc.images[0]?.url || doc.images[0]?.src
+        : undefined);
 
     return {
       ...doc,
@@ -94,4 +105,3 @@ export class ProductCatalogService {
     };
   }
 }
-

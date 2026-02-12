@@ -14,6 +14,8 @@ const EnvSchema = z.object({
   MONGO_EVENTS_COLLECTION: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().optional(),
+  OPENAI_BASE_URL: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   LLM_BASE_URL: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
   LLM_MODEL: z.string().optional()
@@ -31,4 +33,3 @@ export function loadEnv(): Env {
   }
   return parsed.data;
 }
-

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { resolveProductImageUrl } from "../utils/productImage";
 
 interface AcademyProduct {
   _id: string;
@@ -6,6 +7,12 @@ interface AcademyProduct {
   description?: string;
   price?: number;
   imageUrl?: string;
+  image_url?: string;
+  image?: string | { url?: string; src?: string };
+  images?: Array<string | { url?: string; src?: string }>;
+  featuredImage?: { url?: string; src?: string };
+  featured_image?: { url?: string; src?: string };
+  thumbnail?: string;
   reason: string;
 }
 
@@ -56,6 +63,7 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
   const [loadingPopularWeek, setLoadingPopularWeek] = useState(false);
   const [refreshingWeekly, setRefreshingWeekly] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<AcademyProduct | null>(null);
+  const selectedProductImageUrl = selectedProduct ? resolveProductImageUrl(selectedProduct) : undefined;
 
   const API_URL = import.meta.env.VITE_SEARCH_API_URL || "https://geffen.onrender.com";
   const API_KEY = import.meta.env.VITE_SEARCH_API_KEY || "test_key_store_a";
@@ -267,41 +275,44 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
 
                 {msg.role === "assistant" && msg.products && msg.products.length > 0 && (
                   <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {msg.products.map((p) => (
-                      <button
-                        key={p._id}
-                        onClick={() => {
-                          void postEvent("/academy/events/click", {
-                            productId: p._id,
-                            query: lastQuestion,
-                          });
-                          setSelectedProduct(p);
-                        }}
-                        className="rounded-xl border border-geffen-100 bg-gradient-to-b from-white to-geffen-50/40 p-3 text-left transition hover:border-geffen-300 hover:shadow-md"
-                      >
-                        <div className="flex gap-3">
-                          {p.imageUrl ? (
-                            <img
-                              src={p.imageUrl}
-                              alt={p.name}
-                              className="h-20 w-20 rounded-lg border border-geffen-100 bg-white object-contain"
-                            />
-                          ) : (
-                            <div className="h-20 w-20 rounded-lg bg-geffen-100" />
-                          )}
-                          <div className="min-w-0">
-                            <p className="line-clamp-2 text-sm font-semibold text-slate-900">{p.name}</p>
-                            {formatIls(p.price) && (
-                              <p className="mt-0.5 text-xs font-semibold text-geffen-700">{formatIls(p.price)}</p>
+                    {msg.products.map((p) => {
+                      const imageSrc = resolveProductImageUrl(p);
+                      return (
+                        <button
+                          key={p._id}
+                          onClick={() => {
+                            void postEvent("/academy/events/click", {
+                              productId: p._id,
+                              query: lastQuestion,
+                            });
+                            setSelectedProduct(p);
+                          }}
+                          className="rounded-xl border border-geffen-100 bg-gradient-to-b from-white to-geffen-50/40 p-3 text-left transition hover:border-geffen-300 hover:shadow-md"
+                        >
+                          <div className="flex gap-3">
+                            {imageSrc ? (
+                              <img
+                                src={imageSrc}
+                                alt={p.name}
+                                className="h-20 w-20 rounded-lg border border-geffen-100 bg-white object-contain"
+                              />
+                            ) : (
+                              <div className="h-20 w-20 rounded-lg bg-geffen-100" />
                             )}
-                            <p className="mt-1 line-clamp-3 text-xs text-slate-600">{p.reason}</p>
-                            <p className="mt-1 text-[11px] font-semibold text-geffen-700">
-                              לחץ לפירוט מקצועי
-                            </p>
+                            <div className="min-w-0">
+                              <p className="line-clamp-2 text-sm font-semibold text-slate-900">{p.name}</p>
+                              {formatIls(p.price) && (
+                                <p className="mt-0.5 text-xs font-semibold text-geffen-700">{formatIls(p.price)}</p>
+                              )}
+                              <p className="mt-1 line-clamp-3 text-xs text-slate-600">{p.reason}</p>
+                              <p className="mt-1 text-[11px] font-semibold text-geffen-700">
+                                לחץ לפירוט מקצועי
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -361,9 +372,9 @@ export function AcademyChat({ onBack }: AcademyChatProps) {
             </div>
 
             <div className="grid grid-cols-[90px,1fr] gap-4">
-              {selectedProduct.imageUrl ? (
+              {selectedProductImageUrl ? (
                 <img
-                  src={selectedProduct.imageUrl}
+                  src={selectedProductImageUrl}
                   alt={selectedProduct.name}
                   className="h-[90px] w-[90px] rounded-lg border border-geffen-100 bg-white object-contain"
                 />

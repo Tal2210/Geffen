@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
+import { resolveProductImageUrl } from "../utils/productImage";
 
 interface WineProduct {
   _id: string;
@@ -14,6 +15,12 @@ interface WineProduct {
   vintage?: number;
   kosher?: boolean;
   imageUrl?: string;
+  image_url?: string;
+  image?: string | { url?: string; src?: string };
+  images?: Array<string | { url?: string; src?: string }>;
+  featuredImage?: { url?: string; src?: string };
+  featured_image?: { url?: string; src?: string };
+  thumbnail?: string;
   rating?: number;
   score: number;
   finalScore?: number;
@@ -387,74 +394,77 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               </div>
             ) : (
               <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {results.products.map((product) => (
-                  <article
-                    key={product._id}
-                    className="group overflow-hidden rounded-2xl border border-geffen-100 bg-white transition hover:border-geffen-300 hover:shadow-lg"
-                  >
-                    <div className="relative flex h-44 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white">
-                      {product.imageUrl ? (
-                        <img
-                          src={product.imageUrl}
-                          alt={product.name}
-                          className="h-full w-full object-contain p-1 opacity-95 transition group-hover:opacity-100"
-                        />
-                      ) : (
-                        <div className="flex items-center gap-3 text-geffen-500">
-                          <div className={`h-3 w-3 rounded-full ${colorTone[product.color || ""] || "bg-geffen-400"}`} />
-                          <span className="text-xs uppercase tracking-[0.18em]">No Image</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="p-4">
-                      <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
-
-                      {product.description && (
-                        <p className="mb-3 line-clamp-3 text-xs text-slate-500">
-                          {toPlainText(product.description)}
-                        </p>
-                      )}
-
-                      {reasonsById[product._id] && (
-                        <div className="mb-3 rounded-lg border border-geffen-200 bg-geffen-50 px-2.5 py-2">
-                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                            למה זה מתאים לשאילתה
-                          </p>
-                          <p className="text-xs leading-5 text-geffen-800">{reasonsById[product._id]}</p>
-                        </div>
-                      )}
-
-                      <div className="mb-3 space-y-1 text-xs text-slate-500">
-                        {product.color && (
-                          <p>
-                            Color: <span className="capitalize text-slate-800">{product.color}</span>
-                          </p>
-                        )}
-                        {product.country && (
-                          <p>
-                            Country: <span className="capitalize text-slate-800">{product.country}</span>
-                          </p>
-                        )}
-                        {product.grapes && product.grapes.length > 0 && (
-                          <p>
-                            Grapes: <span className="capitalize text-slate-800">{product.grapes.slice(0, 2).join(", ")}</span>
-                          </p>
+                {results.products.map((product) => {
+                  const imageSrc = resolveProductImageUrl(product);
+                  return (
+                    <article
+                      key={product._id}
+                      className="group overflow-hidden rounded-2xl border border-geffen-100 bg-white transition hover:border-geffen-300 hover:shadow-lg"
+                    >
+                      <div className="relative flex h-44 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white">
+                        {imageSrc ? (
+                          <img
+                            src={imageSrc}
+                            alt={product.name}
+                            className="h-full w-full object-contain p-1 opacity-95 transition group-hover:opacity-100"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-3 text-geffen-500">
+                            <div className={`h-3 w-3 rounded-full ${colorTone[product.color || ""] || "bg-geffen-400"}`} />
+                            <span className="text-xs uppercase tracking-[0.18em]">No Image</span>
+                          </div>
                         )}
                       </div>
 
-                      <div className="flex items-end justify-between border-t border-geffen-100 pt-3">
-                        <p className="text-xl font-semibold text-geffen-700">{formatIls(product.price)}</p>
-                        <div className="text-right">
-                          <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match</p>
-                          <p className="text-sm font-semibold text-geffen-700">
-                            {Math.round((product.finalScore || product.score) * 100)}%
+                      <div className="p-4">
+                        <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
+
+                        {product.description && (
+                          <p className="mb-3 line-clamp-3 text-xs text-slate-500">
+                            {toPlainText(product.description)}
                           </p>
+                        )}
+
+                        {reasonsById[product._id] && (
+                          <div className="mb-3 rounded-lg border border-geffen-200 bg-geffen-50 px-2.5 py-2">
+                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                              למה זה מתאים לשאילתה
+                            </p>
+                            <p className="text-xs leading-5 text-geffen-800">{reasonsById[product._id]}</p>
+                          </div>
+                        )}
+
+                        <div className="mb-3 space-y-1 text-xs text-slate-500">
+                          {product.color && (
+                            <p>
+                              Color: <span className="capitalize text-slate-800">{product.color}</span>
+                            </p>
+                          )}
+                          {product.country && (
+                            <p>
+                              Country: <span className="capitalize text-slate-800">{product.country}</span>
+                            </p>
+                          )}
+                          {product.grapes && product.grapes.length > 0 && (
+                            <p>
+                              Grapes: <span className="capitalize text-slate-800">{product.grapes.slice(0, 2).join(", ")}</span>
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-end justify-between border-t border-geffen-100 pt-3">
+                          <p className="text-xl font-semibold text-geffen-700">{formatIls(product.price)}</p>
+                          <div className="text-right">
+                            <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match</p>
+                            <p className="text-sm font-semibold text-geffen-700">
+                              {Math.round((product.finalScore || product.score) * 100)}%
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
               </section>
             )}
 

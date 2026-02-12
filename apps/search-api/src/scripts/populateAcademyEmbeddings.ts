@@ -85,8 +85,8 @@ async function main() {
   const dryRun = process.env.ACADEMY_DRY_RUN === "1";
   const reembedAll = process.env.ACADEMY_REEMBED_ALL === "1";
   const reembedStale = process.env.ACADEMY_REEMBED_STALE === "1";
-  const targetProvider = process.env.EMBEDDING_PROVIDER || "gemini";
-  const targetModel = process.env.EMBEDDING_MODEL || "unknown";
+  const targetProvider = process.env.EMBEDDING_PROVIDER || "openai";
+  const targetModel = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
   const repeatUntilDone = process.env.ACADEMY_REPEAT_UNTIL_DONE === "1";
 
   const client = new MongoClient(env.MONGO_URI);

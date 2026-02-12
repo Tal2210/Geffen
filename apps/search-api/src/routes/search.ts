@@ -299,7 +299,7 @@ export function createSearchRoutes(
     });
 
     server.get("/products/by-name", async (request, reply) => {
-      getMerchantId(request);
+      const merchantId = getMerchantId(request);
       const query = (request.query as any)?.q;
       const limitRaw = (request.query as any)?.limit;
       const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 20;
@@ -308,6 +308,25 @@ export function createSearchRoutes(
         return reply.status(400).send({ error: "invalid_request", message: "Missing query param q" });
       }
 
+      try {
+        // Try semantic search first
+        const result = await searchService.search({
+          query,
+          merchantId,
+          limit: Math.min(Math.max(limit, 1), 50),
+          offset: 0,
+        });
+        
+        // If we got results from semantic search, return them
+        if (result.products && result.products.length > 0) {
+          return reply.send({ products: result.products });
+        }
+      } catch (error) {
+        // Semantic search failed (likely no embeddings or index issues)
+        server.log.warn({ error, merchantId, query }, "Semantic search failed, falling back to name search");
+      }
+      
+      // Fallback to simple name search
       const products = await productCatalogService.searchByName(query, limit);
       return reply.send({ products });
     });
@@ -377,6 +396,53 @@ export function createSearchRoutes(
         service: "wine-search-api",
         timestamp: new Date().toISOString(),
       };
+    });
+
+    /**
+     * GET /debug/boost-rules
+     * Debug endpoint to test boost rule matching
+     */
+    server.get<{ Querystring: { query: string } }>("/debug/boost-rules", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const testQuery = (request.query as any)?.query || "";
+
+      if (!testQuery) {
+        return reply.status(400).send({
+          error: "missing_query",
+          message: "Provide ?query=... parameter",
+        });
+      }
+
+      try {
+        const allRules = await boostRuleService.list(merchantId);
+        const relevantRules = await boostRuleService.getRelevantRules(merchantId, testQuery);
+
+        return reply.send({
+          testQuery,
+          merchantId,
+          allRules: allRules.map((r) => ({
+            id: r._id,
+            triggerQuery: r.triggerQuery,
+            matchMode: r.matchMode,
+            active: r.active,
+            productId: r.productId,
+            productName: r.productName,
+          })),
+          matchingRules: relevantRules.map((r) => ({
+            id: r._id,
+            triggerQuery: r.triggerQuery,
+            matchMode: r.matchMode,
+            productId: r.productId,
+          })),
+          matchCount: relevantRules.length,
+        });
+      } catch (error) {
+        server.log.error({ error, merchantId, testQuery }, "Debug boost rules failed");
+        return reply.status(500).send({
+          error: "debug_failed",
+          message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
     });
 
     /**

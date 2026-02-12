@@ -18,12 +18,20 @@ services:
         value: wine
       - key: MONGO_COLLECTION
         value: stores.bana
-      - key: LLM_API_KEY
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: OPENAI_API_KEY
         sync: false
+      - key: LLM_MODEL
+        value: gpt-4.1-mini
+      - key: EMBEDDING_PROVIDER
+        value: openai
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-large
+      - key: EMBEDDING_DIMENSIONS
+        value: "3072"
       - key: NER_ENABLED
         value: "true"
-      - key: NER_MODEL
-        value: models/gemini-2.0-flash-lite
       - key: CORS_ORIGIN
         value: "*"
 # Render.com deployment configuration
@@ -73,12 +81,18 @@ services:
         value: bana.stores
       - key: PORT
         value: 3000
-      - key: LLM_BASE_URL
-        value: https://generativelanguage.googleapis.com/v1beta/openai
-      - key: LLM_API_KEY
+      - key: OPENAI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: OPENAI_API_KEY
         sync: false  # Set in Render dashboard
+      - key: LLM_MODEL
+        value: gpt-4.1-mini
+      - key: EMBEDDING_PROVIDER
+        value: openai
       - key: EMBEDDING_MODEL
-        value: text-embedding-004
+        value: text-embedding-3-large
+      - key: EMBEDDING_DIMENSIONS
+        value: "3072"
       - key: CORS_ORIGIN
         value: "*"  # Configure based on your frontend domain
     healthCheckPath: /health

@@ -13,15 +13,18 @@ export class EmbeddingService {
 
   constructor(env: Env) {
     this.provider = env.EMBEDDING_PROVIDER;
-    this.apiKey = env.EMBEDDING_API_KEY || env.LLM_API_KEY || "";
+    const openaiKey = env.OPENAI_API_KEY || "";
+    const openaiBaseUrl = env.OPENAI_BASE_URL;
+    this.apiKey = env.EMBEDDING_API_KEY || openaiKey || env.LLM_API_KEY || "";
     this.model = env.EMBEDDING_MODEL;
     this.dimensions = env.EMBEDDING_DIMENSIONS;
-    this.baseUrl = env.EMBEDDING_BASE_URL || this.defaultBaseUrl(this.provider);
+    this.baseUrl = env.EMBEDDING_BASE_URL || openaiBaseUrl || this.defaultBaseUrl(this.provider);
+    if (this.baseUrl.endsWith("/")) this.baseUrl = this.baseUrl.slice(0, -1);
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
     if (!this.apiKey) {
-      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/LLM_API_KEY)");
+      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/OPENAI_API_KEY/LLM_API_KEY)");
     }
 
     try {
@@ -39,7 +42,7 @@ export class EmbeddingService {
 
   async generateBatchEmbeddings(texts: string[]): Promise<number[][]> {
     if (!this.apiKey) {
-      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/LLM_API_KEY)");
+      throw new Error("No embedding API key configured (EMBEDDING_API_KEY/OPENAI_API_KEY/LLM_API_KEY)");
     }
     if (texts.length === 0) return [];
 
@@ -59,8 +62,8 @@ export class EmbeddingService {
   }
 
   private defaultBaseUrl(provider: EmbeddingProvider): string {
-    return provider === "gemini"
-      ? "https://generativelanguage.googleapis.com"
+    return provider === "openai"
+      ? "https://api.openai.com/v1"
       : "https://api.openai.com/v1";
   }
 

@@ -47,7 +47,7 @@
     "kosher": false,
     "inStock": true,
     "stockCount": 25,
-    "embedding": [0.123, 0.456, ...] // 768 numbers
+    "embedding": [0.123, 0.456, ...] // 3072 numbers (per EMBEDDING_DIMENSIONS)
   }
   ```
 
@@ -62,9 +62,12 @@ MONGO_DB="Geffen"
 MONGO_COLLECTION="bana.stores"
 
 # LLM / Embeddings
-LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai"
-LLM_API_KEY="your-gemini-api-key-here"
-EMBEDDING_MODEL="text-embedding-004"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+OPENAI_API_KEY="your-openai-api-key-here"
+LLM_MODEL="gpt-4.1-mini"
+EMBEDDING_PROVIDER="openai"
+EMBEDDING_MODEL="text-embedding-3-large"
+EMBEDDING_DIMENSIONS=3072
 
 # Server
 PORT=3000

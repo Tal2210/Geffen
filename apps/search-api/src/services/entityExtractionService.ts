@@ -41,7 +41,7 @@ export class EntityExtractionService {
 
     // Hard timeout so search never hangs on NER.
     const controller = new AbortController();
-    const timeoutMs = 2500;
+    const timeoutMs = 1300;
     const t = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
@@ -127,9 +127,15 @@ export class EntityExtractionService {
         language: parsed?.language,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? "");
+      const aborted = message.toLowerCase().includes("aborted");
+      if (aborted) {
+        // Timeout fallback is expected under load; fail open quietly.
+        return { filters: {} };
+      }
       console.error(
         "[EntityExtractionService] LLM request failed",
-        error instanceof Error ? error.message : error
+        message
       );
       return { filters: {} };
     } finally {

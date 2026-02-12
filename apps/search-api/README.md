@@ -53,9 +53,12 @@ PORT=3000
 NODE_ENV=development
 
 # LLM / Embeddings
-LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai"
-LLM_API_KEY="your-gemini-api-key"
-EMBEDDING_MODEL="text-embedding-004"
+OPENAI_BASE_URL="https://api.openai.com/v1"
+OPENAI_API_KEY="your-openai-api-key"
+LLM_MODEL="gpt-4.1-mini"
+EMBEDDING_PROVIDER="openai"
+EMBEDDING_MODEL="text-embedding-3-large"
+EMBEDDING_DIMENSIONS=3072
 
 # CORS
 CORS_ORIGIN="http://localhost:5173"

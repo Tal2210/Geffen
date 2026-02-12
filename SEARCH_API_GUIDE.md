@@ -111,7 +111,7 @@ dev_key_123       → merchantId: demo_merchant
 
 ### 2. הוסף Embeddings למוצרים
 
-המוצרים ב-`bana.stores` צריכים שדה `embedding` (מערך של 768 מספרים).
+המוצרים ב-`bana.stores` צריכים שדה `embedding` (מערך של 3072 מספרים, לפי `EMBEDDING_DIMENSIONS`).
 
 אם אין להם, ה-API יעבוד במצב fallback (חיפוש טקסט רגיל).
 
@@ -150,9 +150,12 @@ Render יזהה את ה-`render.yaml` וידפלוי אוטומטית **2 servic
 MONGO_URI=mongodb+srv://...
 MONGO_DB=Geffen
 MONGO_COLLECTION=bana.stores
-LLM_API_KEY=your-gemini-key
-LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-EMBEDDING_MODEL=text-embedding-004
+OPENAI_API_KEY=your-openai-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4.1-mini
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=text-embedding-3-large
+EMBEDDING_DIMENSIONS=3072
 PORT=3000
 NODE_ENV=production
 ```

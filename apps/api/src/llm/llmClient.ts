@@ -18,14 +18,14 @@ function buildUrl(baseUrl: string, path: string) {
 
 export function createLlmClient(): LlmClient {
   const env = loadEnv();
-  const baseUrl = env.LLM_BASE_URL ?? "";
-  const apiKey = env.LLM_API_KEY ?? "";
+  const baseUrl = env.LLM_BASE_URL ?? env.OPENAI_BASE_URL ?? "";
+  const apiKey = env.LLM_API_KEY ?? env.OPENAI_API_KEY ?? "";
   const defaultModel = env.LLM_MODEL ?? "";
 
   async function chatJson(args: { messages: ChatMessage[]; model?: string }) {
     if (!baseUrl || !apiKey || !(args.model ?? defaultModel)) {
       throw new Error(
-        "LLM is not configured. Set LLM_BASE_URL, LLM_API_KEY, LLM_MODEL."
+        "LLM is not configured. Set OPENAI_BASE_URL/OPENAI_API_KEY (or LLM_BASE_URL/LLM_API_KEY) and LLM_MODEL."
       );
     }
 
@@ -89,4 +89,3 @@ export function createLlmClient(): LlmClient {
 
   return { chatJson };
 }
-
