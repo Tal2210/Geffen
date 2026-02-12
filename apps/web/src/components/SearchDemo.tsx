@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { resolveProductImageUrl } from "../utils/productImage";
 
 interface WineProduct {
@@ -89,21 +89,42 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const [selectedColors, setSelectedColors] = useState<string[]>([]);
   const [kosher, setKosher] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(false);
+  const [autoSearching, setAutoSearching] = useState(false);
   const [results, setResults] = useState<SearchResponse | null>(null);
   const [reasonsById, setReasonsById] = useState<Record<string, string>>({});
   const [explanationIntro, setExplanationIntro] = useState<string>("");
+  const [autocompleteOptions, setAutocompleteOptions] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestCounterRef = useRef(0);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const skipNextAutoSearchRef = useRef(false);
 
   const API_URL = import.meta.env.VITE_SEARCH_API_URL || "https://geffen.onrender.com";
   const API_KEY = import.meta.env.VITE_SEARCH_API_KEY || "test_key_store_a";
   const MERCHANT_ID = import.meta.env.VITE_SEARCH_MERCHANT_ID || "store_a";
 
-  const handleSearch = async () => {
-    if (!query.trim()) {
+  const runSearch = useCallback(async (rawQuery: string, mode: "manual" | "auto" = "manual") => {
+    const q = rawQuery.trim();
+    if (!q) {
+      setResults(null);
+      setAutocompleteOptions([]);
+      setReasonsById({});
+      setExplanationIntro("");
+      setError(null);
       return;
     }
 
-    setLoading(true);
+    const requestId = ++requestCounterRef.current;
+    activeRequestRef.current?.abort();
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+
+    if (mode === "manual") {
+      setLoading(true);
+    } else {
+      setAutoSearching(true);
+    }
     setError(null);
 
     try {
@@ -114,13 +135,14 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
           "X-API-Key": API_KEY,
         },
         body: JSON.stringify({
-          query: query.trim(),
+          query: q,
           merchantId: MERCHANT_ID,
           limit: 12,
           maxPrice: maxPrice ? parseInt(maxPrice, 10) : undefined,
           colors: selectedColors.length > 0 ? selectedColors : undefined,
           kosher,
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -129,11 +151,22 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
       }
 
       const data: SearchResponse = await response.json();
+      if (requestId !== requestCounterRef.current) return;
+
       setResults(data);
+      setAutocompleteOptions(
+        Array.from(
+          new Set(
+            (data.products || [])
+              .map((p) => p.name?.trim())
+              .filter((name): name is string => Boolean(name))
+          )
+        ).slice(0, 8)
+      );
       setReasonsById({});
       setExplanationIntro("");
 
-      if (data.products.length > 0) {
+      if (mode === "manual" && data.products.length > 0) {
         try {
           const explainResponse = await fetch(`${API_URL}/search/explain`, {
             method: "POST",
@@ -142,7 +175,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               "X-API-Key": API_KEY,
             },
             body: JSON.stringify({
-              query: query.trim(),
+              query: q,
               products: data.products.slice(0, 8).map((p) => ({
                 id: p._id,
                 name: p.name,
@@ -152,10 +185,12 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                 grapes: p.grapes,
               })),
             }),
+            signal: controller.signal,
           });
 
           if (explainResponse.ok) {
             const explainData: ExplanationResponse = await explainResponse.json();
+            if (requestId !== requestCounterRef.current) return;
             const mapped = Object.fromEntries(
               explainData.reasons.map((r) => [r.id, r.reason])
             ) as Record<string, string>;
@@ -167,12 +202,65 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
         }
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (requestId !== requestCounterRef.current) return;
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
+      setAutocompleteOptions([]);
     } finally {
-      setLoading(false);
+      if (mode === "manual") {
+        setLoading(false);
+      } else {
+        setAutoSearching(false);
+      }
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
     }
-  };
+  }, [API_KEY, API_URL, MERCHANT_ID, kosher, maxPrice, selectedColors]);
+
+  const runManualSearchFor = useCallback(
+    (nextQuery: string) => {
+      skipNextAutoSearchRef.current = true;
+      setQuery(nextQuery);
+      void runSearch(nextQuery, "manual");
+    },
+    [runSearch]
+  );
+
+  const handleSearch = useCallback(() => {
+    void runSearch(query, "manual");
+  }, [query, runSearch]);
+
+  useEffect(() => {
+    if (skipNextAutoSearchRef.current) {
+      skipNextAutoSearchRef.current = false;
+      return;
+    }
+
+    const q = query.trim();
+    if (!q) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setAutocompleteOptions([]);
+      return;
+    }
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      void runSearch(q, "auto");
+    }, 320);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, maxPrice, selectedColors, kosher, runSearch]);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      activeRequestRef.current?.abort();
+    };
+  }, []);
 
   const toggleColor = (color: string) => {
     setSelectedColors((prev) =>
@@ -181,6 +269,13 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   };
 
   const colors = ["red", "white", "rosé", "sparkling"];
+  const visibleAutocompleteOptions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return autocompleteOptions
+      .filter((name) => name.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [autocompleteOptions, query]);
 
   return (
     <div className="min-h-screen bg-[#fffdfd] text-slate-900">
@@ -225,14 +320,31 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               Query
             </label>
             <div className="flex flex-col gap-3 md:flex-row">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                placeholder="fruity red from france or יין לבן יבש"
-                className="h-11 flex-1 rounded-xl border border-geffen-200 bg-white px-4 text-sm text-slate-800 placeholder:text-slate-400 outline-none ring-geffen-200 transition focus:border-geffen-400 focus:ring-2"
-              />
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                  placeholder="fruity red from france or יין לבן יבש"
+                  className="h-11 w-full rounded-xl border border-geffen-200 bg-white px-4 text-sm text-slate-800 placeholder:text-slate-400 outline-none ring-geffen-200 transition focus:border-geffen-400 focus:ring-2"
+                />
+                {visibleAutocompleteOptions.length > 0 && (
+                  <div className="absolute z-40 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-geffen-200 bg-white p-1 shadow-xl">
+                    {visibleAutocompleteOptions.map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => runManualSearchFor(option)}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-geffen-50"
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 onClick={handleSearch}
                 disabled={loading || !query.trim()}
@@ -245,6 +357,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                 {loading ? "Searching..." : "Run Search"}
               </button>
             </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              {autoSearching ? "מעדכן תוצאות תוך כדי הקלדה..." : "Autocomplete פעיל - אפשר לבחור תוצאה מהרשימה."}
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -487,8 +602,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
             <div className="mt-8 flex flex-col items-center justify-center gap-3 md:flex-row">
               <button
                 onClick={() => {
-                  setQuery("red wine from bordeaux");
-                  setTimeout(handleSearch, 100);
+                  runManualSearchFor("red wine from bordeaux");
                 }}
                 className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-sm text-geffen-700 transition hover:border-geffen-400 hover:bg-geffen-50"
               >
@@ -496,8 +610,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               </button>
               <button
                 onClick={() => {
-                  setQuery("יין לבן יבש");
-                  setTimeout(handleSearch, 100);
+                  runManualSearchFor("יין לבן יבש");
                 }}
                 className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-sm text-geffen-700 transition hover:border-geffen-400 hover:bg-geffen-50"
               >
