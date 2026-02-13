@@ -84,9 +84,12 @@ interface ImageSearchResponse {
   metadata: {
     decision: "exact" | "alternatives";
     reason: string;
+    derivedTags: string[];
+    tagSource: "llm_catalog_context" | "catalog_fallback";
     timings: {
       analysis: number;
       matching: number;
+      tagging: number;
       total: number;
     };
   };
@@ -773,6 +776,23 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                     </p>
                   )}
                 </div>
+                {imageResult.metadata.derivedTags && imageResult.metadata.derivedTags.length > 0 && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                      Wine Tags ({imageResult.metadata.tagSource === "llm_catalog_context" ? "LLM+Catalog" : "Catalog"})
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {imageResult.metadata.derivedTags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full border border-geffen-200 bg-geffen-50 px-2.5 py-1 text-xs text-geffen-800"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
             )}
 

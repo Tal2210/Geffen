@@ -34,6 +34,7 @@ export class WineImageSearchService {
   private readonly enabled: boolean;
   private readonly maxImageBytes = 6 * 1024 * 1024;
   private readonly analysisTimeoutMs = 18_000;
+  private readonly taggingTimeoutMs = 3_500;
 
   constructor(
     private env: Env,
@@ -79,6 +80,13 @@ export class WineImageSearchService {
     if (exactMatch) {
       alternatives = this.pinProductFirst(alternatives, exactMatch);
     }
+    const startTagging = Date.now();
+    const taggingResult = await this.deriveWineTags(
+      detectedWine,
+      exactMatch,
+      alternatives.slice(0, 8)
+    );
+    const taggingMs = Date.now() - startTagging;
 
     const matchingMs = Date.now() - startMatching;
     const totalMs = Date.now() - startTotal;
@@ -91,9 +99,12 @@ export class WineImageSearchService {
       metadata: {
         decision,
         reason: exactMatch ? "strict_exact_match_found" : alternativesSearch.reason,
+        derivedTags: taggingResult.tags,
+        tagSource: taggingResult.source,
         timings: {
           analysis: analysisMs,
           matching: matchingMs,
+          tagging: taggingMs,
           total: totalMs,
         },
       },
@@ -531,6 +542,174 @@ export class WineImageSearchService {
       default:
         return [];
     }
+  }
+
+  private async deriveWineTags(
+    detectedWine: DetectedWine,
+    exactMatch: WineProduct | null,
+    alternatives: WineProduct[]
+  ): Promise<{ tags: string[]; source: "llm_catalog_context" | "catalog_fallback" }> {
+    const contextProducts = [exactMatch, ...alternatives]
+      .filter((p): p is WineProduct => Boolean(p))
+      .slice(0, 6);
+
+    const fallbackTags = this.buildFallbackTags(detectedWine, contextProducts);
+    if (!this.enabled || contextProducts.length === 0) {
+      return { tags: fallbackTags, source: "catalog_fallback" };
+    }
+
+    const compactProducts = contextProducts.map((p) => ({
+      name: p.name,
+      price: p.price,
+      color: p.color,
+      country: p.country,
+      region: p.region,
+      grapes: Array.isArray(p.grapes) ? p.grapes.slice(0, 4) : [],
+      sweetness: p.sweetness,
+      description: this.toPlainText(p.description).slice(0, 220),
+    }));
+
+    const prompt = [
+      "You create concise wine tags for an e-commerce UI.",
+      "Use detected bottle info plus matched product metadata context.",
+      "Return JSON only.",
+      "",
+      "Schema:",
+      "{",
+      '  "tags": string[]',
+      "}",
+      "",
+      "Rules:",
+      "- 6 to 12 tags.",
+      "- Mix style + origin + grape/character + price positioning tags.",
+      "- Short tags only (max 24 chars each).",
+      "- No duplicates.",
+      "- Prefer Hebrew tags when context is Hebrew.",
+      "",
+      `Detected wine: ${JSON.stringify(detectedWine)}`,
+      `Catalog context: ${JSON.stringify(compactProducts)}`,
+    ].join("\n");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.taggingTimeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content: prompt }],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        return { tags: fallbackTags, source: "catalog_fallback" };
+      }
+
+      const data: any = await response.json();
+      const raw = data?.choices?.[0]?.message?.content;
+      if (!raw || typeof raw !== "string") {
+        return { tags: fallbackTags, source: "catalog_fallback" };
+      }
+      const json = this.extractJson(raw);
+      if (!json) {
+        return { tags: fallbackTags, source: "catalog_fallback" };
+      }
+      const parsed = JSON.parse(json);
+      const tags: string[] = Array.isArray(parsed?.tags)
+        ? parsed.tags
+            .map((t: unknown) => (typeof t === "string" ? t.trim() : ""))
+            .filter((t: string) => t.length > 0 && t.length <= 24)
+        : [];
+
+      const clean: string[] = Array.from(new Set<string>(tags)).slice(0, 12);
+      if (clean.length < 4) {
+        return { tags: fallbackTags, source: "catalog_fallback" };
+      }
+      return { tags: clean, source: "llm_catalog_context" };
+    } catch {
+      return { tags: fallbackTags, source: "catalog_fallback" };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private buildFallbackTags(detectedWine: DetectedWine, products: WineProduct[]): string[] {
+    const tags = new Set<string>();
+
+    const add = (value?: string) => {
+      const v = String(value || "").trim();
+      if (v) tags.add(v);
+    };
+
+    const color = this.getDetectedColor(detectedWine);
+    if (color) {
+      const labelMap: Record<string, string> = {
+        red: "יין אדום",
+        white: "יין לבן",
+        rose: "יין רוזה",
+        sparkling: "יין מבעבע",
+      };
+      add(labelMap[color]);
+    }
+
+    add(detectedWine.country);
+    add(detectedWine.region);
+    for (const grape of detectedWine.grapes || []) add(grape);
+    for (const styleTag of detectedWine.styleTags || []) add(styleTag);
+
+    const prices = products
+      .map((p) => Number(p.price))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (prices.length > 0) {
+      const avg = prices.reduce((sum, n) => sum + n, 0) / prices.length;
+      if (avg < 80) add("תמורה גבוהה");
+      else if (avg < 180) add("טווח מחיר בינוני");
+      else add("פרימיום");
+    }
+
+    const sweetness = products
+      .map((p) => String(p.sweetness || "").trim())
+      .find(Boolean);
+    if (sweetness) add(sweetness);
+
+    const characterHints = [
+      ["fresh", "רענן"],
+      ["fruity", "פירותי"],
+      ["dry", "יבש"],
+      ["mineral", "מינרלי"],
+      ["acid", "חומציות מודגשת"],
+      ["light", "קליל"],
+      ["full", "גוף מלא"],
+      ["elegant", "אלגנטי"],
+    ] as const;
+    const combinedText = this.normalizeText(
+      [
+        ...products.map((p) => p.description || ""),
+        ...(detectedWine.styleTags || []),
+      ]
+        .join(" ")
+        .slice(0, 1500)
+    );
+    for (const [needle, label] of characterHints) {
+      if (combinedText.includes(needle) || combinedText.includes(this.normalizeText(label))) add(label);
+    }
+
+    return Array.from(tags).slice(0, 12);
+  }
+
+  private toPlainText(value?: string): string {
+    if (!value) return "";
+    return value
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private pinProductFirst(products: WineProduct[], exactMatch: WineProduct): WineProduct[] {

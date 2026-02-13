@@ -146,9 +146,12 @@ export interface ImageSearchResult {
   metadata: {
     decision: "exact" | "alternatives";
     reason: string;
+    derivedTags: string[];
+    tagSource: "llm_catalog_context" | "catalog_fallback";
     timings: {
       analysis: number;
       matching: number;
+      tagging: number;
       total: number;
     };
   };
