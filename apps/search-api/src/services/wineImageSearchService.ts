@@ -67,18 +67,15 @@ export class WineImageSearchService {
 
     const startMatching = Date.now();
     const exactMatch = await this.findStrictExactMatch(detectedWine);
-    const semanticQuery = this.buildSemanticQuery(detectedWine, input.queryHint);
+    const searchLimit = Math.min(50, Math.max(input.limit * 2, exactMatch ? 20 : 16));
+    const alternativesSearch = await this.findAlternatives(
+      detectedWine,
+      input.queryHint,
+      input.merchantId,
+      searchLimit
+    );
 
-    const semanticInput: SearchQuery = {
-      query: semanticQuery,
-      merchantId: input.merchantId,
-      offset: 0,
-      limit: Math.max(input.limit, exactMatch ? 8 : input.limit),
-      countries: detectedWine.country ? [detectedWine.country] : undefined,
-    };
-    const semanticResult = await this.searchService.search(semanticInput);
-
-    let alternatives = semanticResult.products as WineProduct[];
+    let alternatives = alternativesSearch.products;
     if (exactMatch) {
       alternatives = this.pinProductFirst(alternatives, exactMatch);
     }
@@ -93,9 +90,7 @@ export class WineImageSearchService {
       alternatives: alternatives.slice(0, input.limit),
       metadata: {
         decision,
-        reason: exactMatch
-          ? "strict_exact_match_found"
-          : "no_strict_match_returned_closest_alternatives",
+        reason: exactMatch ? "strict_exact_match_found" : alternativesSearch.reason,
         timings: {
           analysis: analysisMs,
           matching: matchingMs,
@@ -296,6 +291,100 @@ export class WineImageSearchService {
       .filter(Boolean);
 
     return parts.join(" ");
+  }
+
+  private buildDescriptorQuery(detectedWine: DetectedWine, queryHint?: string): string {
+    const parts = [
+      detectedWine.country,
+      detectedWine.region,
+      ...(detectedWine.grapes || []),
+      ...(detectedWine.styleTags || []),
+      queryHint,
+      "wine",
+    ]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .filter(Boolean);
+    return parts.join(" ");
+  }
+
+  private buildBroadFallbackQuery(detectedWine: DetectedWine): string {
+    const style = (detectedWine.styleTags || []).slice(0, 2).join(" ");
+    const country = detectedWine.country ? String(detectedWine.country).trim() : "";
+    const region = detectedWine.region ? String(detectedWine.region).trim() : "";
+    return [style, country, region, "יין wine red white sparkling"].filter(Boolean).join(" ");
+  }
+
+  private async findAlternatives(
+    detectedWine: DetectedWine,
+    queryHint: string | undefined,
+    merchantId: string,
+    limit: number
+  ): Promise<{ products: WineProduct[]; reason: string }> {
+    const attempts = [
+      {
+        reason: "semantic_primary",
+        query: this.buildSemanticQuery(detectedWine, queryHint),
+      },
+      {
+        reason: "semantic_descriptor_fallback",
+        query: this.buildDescriptorQuery(detectedWine, queryHint),
+      },
+      {
+        reason: "semantic_broad_fallback",
+        query: this.buildBroadFallbackQuery(detectedWine),
+      },
+    ].filter((a) => a.query.trim().length > 0);
+
+    for (const attempt of attempts) {
+      const products = await this.runSemanticSearch(attempt.query, merchantId, limit);
+      if (products.length > 0) {
+        return { products, reason: attempt.reason };
+      }
+    }
+
+    const catalogFallback = await this.searchCatalogFallback(detectedWine, limit);
+    if (catalogFallback.length > 0) {
+      return { products: catalogFallback, reason: "catalog_name_fallback" };
+    }
+
+    return { products: [], reason: "no_alternatives_found" };
+  }
+
+  private async runSemanticSearch(
+    query: string,
+    merchantId: string,
+    limit: number
+  ): Promise<WineProduct[]> {
+    const semanticInput: SearchQuery = {
+      query,
+      merchantId,
+      offset: 0,
+      limit,
+    };
+    try {
+      const semanticResult = await this.searchService.search(semanticInput);
+      return semanticResult.products as WineProduct[];
+    } catch (error) {
+      console.warn("[WineImageSearchService] semantic fallback search failed", {
+        query,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  private async searchCatalogFallback(
+    detectedWine: DetectedWine,
+    limit: number
+  ): Promise<WineProduct[]> {
+    const lookup = [detectedWine.name, detectedWine.producer].filter(Boolean).join(" ").trim();
+    if (!lookup) return [];
+    const docs = await this.productCatalogService.searchByName(lookup, Math.min(50, limit));
+    return docs.map((doc) => ({
+      ...(doc as any),
+      score: Number((doc as any).score || 0.28),
+      finalScore: Number((doc as any).finalScore || 0.28),
+    })) as WineProduct[];
   }
 
   private pinProductFirst(products: WineProduct[], exactMatch: WineProduct): WineProduct[] {
