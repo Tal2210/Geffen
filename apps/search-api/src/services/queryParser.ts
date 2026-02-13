@@ -81,6 +81,8 @@ const PATTERNS = {
     meat: /(?:\b(meat|beef|steak)\b|ל?בשר)/i,
     cheese: /(?:\b(cheese)\b|ל?גבינ(?:ה|ות))/i,
     pasta: /(?:\b(pasta)\b|ל?פסט(?:ה|ות))/i,
+    crisp: /(?:\b(crisp|crispy|fresh|mineral)\b|קריספ(?:י|ית)?|רעננ(?:ה|ות|ים)?|חומצי(?:ות)?|מינרל(?:י|ית))/i,
+    "north europe": /(?:\b(north(?:ern)?\s*europe|nordic|scandinav)\b|צפון\s*אירופ(?:ה|י)?|סקנדינב(?:י|יה))/i,
   },
   
   // Price patterns
@@ -151,6 +153,15 @@ export class QueryParser {
     .map(([tag]) => tag);
   if (softTags.length > 0) filters.softTags = softTags;
 
+  // Regional intent shortcut: "north europe" is not a single country field,
+  // so convert it into likely available catalog countries for deterministic filtering.
+  if (softTags.includes("north europe")) {
+    const existingCountries = new Set((filters.countries || []).map((c) => String(c).toLowerCase()));
+    existingCountries.add("germany");
+    existingCountries.add("france");
+    filters.countries = Array.from(existingCountries);
+  }
+
   // Hard color category already captured above
 
     // Extract price range
@@ -220,7 +231,9 @@ export class QueryParser {
       .replace(/ל?פיצ(?:ה|ות)/g, " פיצה ")
       .replace(/ל?דג(?:ים)?/g, " דגים ")
       .replace(/ל?גבינ(?:ה|ות)/g, " גבינות ")
-      .replace(/ל?בשר/g, " בשר ");
+      .replace(/ל?בשר/g, " בשר ")
+      .replace(/קריספ(?:י|ית)?/g, " רענן ")
+      .replace(/צפון\s*אירופ(?:ה|י)?/g, " אירופה ");
 
     // Remove price mentions
     cleaned = cleaned.replace(

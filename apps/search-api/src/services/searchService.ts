@@ -59,12 +59,16 @@ export class SearchService {
       // 1. Parse query and extract filters
       const startParsing = Date.now();
       const ruleFilters = this.parser.parse(query.query);
+      const ruleHasSpecificType =
+        Array.isArray(ruleFilters.type) &&
+        ruleFilters.type.some((t) => String(t).toLowerCase() !== "wine");
       const hasRuleHints =
-        Boolean(ruleFilters.type?.length) ||
+        Boolean(ruleHasSpecificType) ||
         Boolean(ruleFilters.category?.length) ||
         Boolean(ruleFilters.countries?.length) ||
         Boolean(ruleFilters.grapes?.length) ||
         Boolean(ruleFilters.sweetness?.length) ||
+        Boolean((ruleFilters as any).softTags?.length) ||
         Boolean(ruleFilters.kosher !== undefined) ||
         Boolean(ruleFilters.priceRange?.min !== undefined || ruleFilters.priceRange?.max !== undefined);
       const ner = hasRuleHints
@@ -200,6 +204,7 @@ export class SearchService {
       const normalizedTypes = (mergedFilters.type || []).map((t: string) => String(t).toLowerCase());
       const hasSpecificTypeConstraint = normalizedTypes.some((t: string) => t !== "wine");
       const shouldApplyTypeAsHardCategory = hasSpecificTypeConstraint;
+      const requiresWineCategory = normalizedTypes.includes("wine");
       const hardCategorySet = new Set(
         hardColorCats.length > 0 ? hardColorCats : shouldApplyTypeAsHardCategory ? hardTypeCats : []
       );
@@ -299,9 +304,6 @@ export class SearchService {
               ...(typeof p.region === "string" ? [p.region] : []),
               ...productCategories,
               ...productSoftCategories,
-              ...(typeof p.name === "string" ? [p.name] : []),
-              ...(typeof p.description === "string" ? [p.description] : []),
-              ...(typeof p.short_description === "string" ? [p.short_description] : []),
             ]
               .map((v) => String(v).toLowerCase())
               .filter(Boolean);
@@ -309,6 +311,12 @@ export class SearchService {
               hardCountryAliases.some((alias) => fieldValue.includes(alias))
             );
             if (!matchesCountry) return false;
+          }
+          if (requiresWineCategory) {
+            const looksLikeWine = productCategories.some((c: string) =>
+              String(c).toLowerCase().includes("יין")
+            );
+            if (!looksLikeWine) return false;
           }
           if (mergedFilters.kosher !== undefined && p.kosher !== mergedFilters.kosher) return false;
           if (mergedFilters.priceRange) {
@@ -346,6 +354,12 @@ export class SearchService {
         const map = new Map<string, string[]>([
           ["italian food", ["איטליה", "איטלקי", "פסטה", "פיצה"]],
           ["italian cuisine", ["איטליה", "איטלקי", "פסטה", "פיצה"]],
+          ["north europe", ["גרמניה", "צרפת", "ריזלינג", "לואר", "בורגון"]],
+          ["crispy", ["רענן", "מינרלי", "יבש", "לבן", "מבעבע", "חומציות"]],
+          ["crisp", ["רענן", "מינרלי", "יבש", "לבן", "מבעבע", "חומציות"]],
+          ["fresh", ["רענן", "מינרלי", "יבש", "לבן", "מבעבע", "חומציות"]],
+          ["קריספי", ["רענן", "מינרלי", "יבש", "לבן", "מבעבע", "חומציות"]],
+          ["רענן", ["רענן", "מינרלי", "יבש", "לבן", "מבעבע", "חומציות"]],
           ["pizza", ["פיצה", "מנות איטלקיות", "איטליה"]],
           ["פיצה", ["פיצה", "מנות איטלקיות", "איטליה"]],
           ["fish", ["דגים", "דג", "פירות ים"]],
@@ -379,6 +393,13 @@ export class SearchService {
       };
 
       const softTags = mapSoftTags(mergedFilters);
+
+      if (hardFilteredResults.length === 0 && softTags.length > 0) {
+        const softIntentResults = await this.vectorSearch.fetchProductsBySoftTags(softTags, 50);
+        if (softIntentResults.length > 0) {
+          hardFilteredResults = applyHardConstraints(softIntentResults as any[]);
+        }
+      }
 
       const boostedResults = hardFilteredResults.map((product) => {
         if (!softTags.length) return product;

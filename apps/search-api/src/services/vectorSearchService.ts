@@ -297,6 +297,75 @@ export class VectorSearchService {
     })) as VectorSearchHit[];
   }
 
+  async fetchProductsBySoftTags(tags: string[], limit = 50): Promise<VectorSearchHit[]> {
+    const normalizedTags = Array.from(
+      new Set((tags || []).map((t) => String(t).trim()).filter((t) => t.length > 1))
+    );
+    if (normalizedTags.length === 0) return [];
+
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const matchers = normalizedTags.map((t) => new RegExp(escape(t), "i"));
+
+    const docs = await this.collection
+      .find({
+        $or: [
+          { softCategory: { $in: matchers as any[] } },
+          { category: { $in: matchers as any[] } },
+          ...matchers.flatMap((re) => [
+            { name: re },
+            { description: re },
+            { short_description: re },
+            { country: re },
+            { region: re },
+          ]),
+        ],
+      })
+      .project({
+        _id: 1,
+        merchantId: 1,
+        name: 1,
+        description: 1,
+        short_description: 1,
+        price: 1,
+        currency: 1,
+        color: 1,
+        country: 1,
+        region: 1,
+        grapes: 1,
+        vintage: 1,
+        sweetness: 1,
+        kosher: 1,
+        alcohol: 1,
+        volume: 1,
+        imageUrl: 1,
+        image_url: 1,
+        image: 1,
+        images: 1,
+        featuredImage: 1,
+        featured_image: 1,
+        thumbnail: 1,
+        inStock: 1,
+        stockCount: 1,
+        rating: 1,
+        reviewCount: 1,
+        salesCount30d: 1,
+        viewCount30d: 1,
+        popularity: 1,
+        category: 1,
+        softCategory: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .limit(Math.max(1, Math.min(limit, 100)))
+      .toArray();
+
+    return docs.map((doc: any) => ({
+      ...this.normalizeImageFields(doc),
+      _id: doc._id.toString(),
+      score: 0.0001,
+    })) as VectorSearchHit[];
+  }
+
   /**
    * Fallback to text search if vector search is not available
    * This allows the API to work even without vector index
@@ -377,19 +446,24 @@ export class VectorSearchService {
     const normalizedQuery = query
       .replace(/[\u0591-\u05C7]/g, "") // Remove Hebrew diacritics
       .replace(/ש?מתאי(?:ם|מה|מות|מים)?/g, " ")
+      .replace(/ש?מגיע(?:ה|ים|ות)?/g, " ")
       .replace(/ל?ארוח(?:ה|ות)/g, " אוכל ")
       .replace(/ל?מאכל(?:ים)?/g, " אוכל ")
+      .replace(/צפון\s*אירופ(?:ה|י)?/g, " צפון אירופה ")
       .replace(/איטלקי(?:ת|ות)/g, " איטלקי ")
       .replace(/ל?פיצ(?:ה|ות)/g, " פיצה ")
       .replace(/ל?דג(?:ים)?/g, " דגים ")
       .replace(/ל?גבינ(?:ה|ות)/g, " גבינות ")
       .replace(/ל?בשר/g, " בשר ")
+      .replace(/קריספ(?:י|ית)?/g, " רענן ")
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
 
     const stopTerms = new Set([
       "ש",
+      "שמגיע",
+      "מגיע",
       "של",
       "עם",
       "את",
@@ -410,6 +484,9 @@ export class VectorSearchService {
       איטלקי: ["איטלקי", "איטליה", "italian", "italy"],
       צרפתי: ["צרפתי", "צרפת", "french", "france"],
       ישראלי: ["ישראלי", "ישראל", "israeli", "israel"],
+      אירופה: ["אירופה", "צרפת", "גרמניה", "france", "germany"],
+      צפון: ["צפון", "צפוני", "nordic", "scandinavia"],
+      רענן: ["רענן", "קריספי", "מינרלי", "יבש", "fresh", "crisp", "mineral"],
       פיצה: ["פיצה", "pizza", "מנות איטלקיות"],
       דגים: ["דגים", "דג", "fish", "seafood", "פירות ים"],
       גבינות: ["גבינות", "גבינה", "cheese"],
