@@ -110,7 +110,17 @@ export class VectorSearchService {
 
     try {
       const results = await this.collection.aggregate(pipeline).toArray();
-      return results.map((doc) => this.normalizeImageFields(doc)) as VectorSearchHit[];
+      if (results.length > 0) {
+        return results.map((doc) => this.normalizeImageFields(doc)) as VectorSearchHit[];
+      }
+
+      // Atlas returned no vector matches. Try local cosine over embedding-bearing docs.
+      const localFallback = await this.localEmbeddingFallback(embedding, preFilter, limit);
+      if (localFallback.length > 0) {
+        return localFallback;
+      }
+
+      return [];
     } catch (error) {
       console.error("Vector search failed:", error);
 
@@ -394,6 +404,99 @@ export class VectorSearchService {
       _id: doc._id.toString(),
       score: 0.5, // Default score for fallback
     })) as VectorSearchHit[];
+  }
+
+  private async localEmbeddingFallback(
+    queryEmbedding: number[],
+    preFilter: Record<string, any>,
+    limit: number
+  ): Promise<VectorSearchHit[]> {
+    const projection = {
+      _id: 1,
+      merchantId: 1,
+      name: 1,
+      description: 1,
+      short_description: 1,
+      price: 1,
+      currency: 1,
+      color: 1,
+      country: 1,
+      region: 1,
+      grapes: 1,
+      vintage: 1,
+      sweetness: 1,
+      kosher: 1,
+      alcohol: 1,
+      volume: 1,
+      imageUrl: 1,
+      image_url: 1,
+      image: 1,
+      images: 1,
+      featuredImage: 1,
+      featured_image: 1,
+      thumbnail: 1,
+      inStock: 1,
+      stockCount: 1,
+      rating: 1,
+      reviewCount: 1,
+      salesCount30d: 1,
+      viewCount30d: 1,
+      popularity: 1,
+      category: 1,
+      softCategory: 1,
+      createdAt: 1,
+      updatedAt: 1,
+      embedding: 1,
+    } as const;
+
+    const filterWithEmbeddings = {
+      ...(Object.keys(preFilter).length > 0 ? preFilter : {}),
+      embedding: { $exists: true, $type: "array", $ne: [] },
+    };
+
+    const docs = await this.collection
+      .find(filterWithEmbeddings)
+      .project(projection)
+      .limit(800)
+      .toArray();
+
+    if (docs.length === 0) return [];
+
+    const scored = docs
+      .map((doc: any) => {
+        const emb = Array.isArray(doc.embedding) ? doc.embedding : [];
+        const score = this.cosineSimilarity(queryEmbedding, emb);
+        if (!Number.isFinite(score) || score <= 0) return null;
+        const normalized = this.normalizeImageFields(doc);
+        return {
+          ...normalized,
+          _id: String(doc._id),
+          score,
+        } as VectorSearchHit;
+      })
+      .filter((item): item is VectorSearchHit => Boolean(item))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, Math.min(limit, 100)));
+
+    return scored;
+  }
+
+  private cosineSimilarity(a: number[], b: number[]): number {
+    if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+    if (a.length === 0 || b.length === 0) return 0;
+    const len = Math.min(a.length, b.length);
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < len; i += 1) {
+      const x = Number(a[i] || 0);
+      const y = Number(b[i] || 0);
+      dot += x * y;
+      normA += x * x;
+      normB += y * y;
+    }
+    if (normA <= 0 || normB <= 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
   private normalizeImageFields(doc: any): any {

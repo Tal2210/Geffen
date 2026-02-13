@@ -129,6 +129,7 @@ export interface SearchResult {
       textCandidates: number;
       mergedCandidates: number;
       mode?: "text_only" | "hybrid";
+      vectorStatus?: "ok" | "empty" | "skipped_text_strong" | "embedding_failed";
     };
     timings: {
       parsing: number;

@@ -41,6 +41,8 @@ interface SearchMetadata {
     vectorCandidates: number;
     textCandidates: number;
     mergedCandidates: number;
+    mode?: "text_only" | "hybrid";
+    vectorStatus?: "ok" | "empty" | "skipped_text_strong" | "embedding_failed";
   };
   timings: {
     parsing: number;
@@ -726,6 +728,12 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                 <div className="mt-4 rounded-xl border border-geffen-100 bg-white p-3 text-xs text-slate-600">
                   <span className="font-semibold text-geffen-700">Hybrid retrieval</span>: vector {results.metadata.retrieval.vectorCandidates}, text{" "}
                   {results.metadata.retrieval.textCandidates}, merged {results.metadata.retrieval.mergedCandidates}
+                  {results.metadata.retrieval.mode && (
+                    <span> | mode: {results.metadata.retrieval.mode}</span>
+                  )}
+                  {results.metadata.retrieval.vectorStatus && (
+                    <span> | vector: {results.metadata.retrieval.vectorStatus}</span>
+                  )}
                 </div>
               )}
             </section>

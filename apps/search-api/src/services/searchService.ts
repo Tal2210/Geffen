@@ -251,6 +251,8 @@ export class SearchService {
 
       const useTextOnly = this.isTextStrongEnough(textResults, query.limit);
       let vectorResults: any[] = [];
+      let vectorStatus: "ok" | "empty" | "skipped_text_strong" | "embedding_failed" =
+        useTextOnly ? "skipped_text_strong" : "empty";
       if (!useTextOnly) {
         const startEmbedding = Date.now();
         const embeddingResultSet = await Promise.resolve(
@@ -267,9 +269,11 @@ export class SearchService {
             preFilterObj,
             50
           );
+          vectorStatus = vectorResults.length > 0 ? "ok" : "empty";
         } else {
           timings.embedding = Date.now() - startEmbedding;
           console.warn("Embedding generation failed in adaptive path:", embeddingResultSet.reason);
+          vectorStatus = "embedding_failed";
         }
       }
 
@@ -281,6 +285,7 @@ export class SearchService {
         textCandidates: textResults.length,
         mergedCandidates: baseResults.length,
         mode: useTextOnly ? ("text_only" as const) : ("hybrid" as const),
+        vectorStatus,
       };
       timings.vectorSearch = Date.now() - startVectorRetrieval;
 
