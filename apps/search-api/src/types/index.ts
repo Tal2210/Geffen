@@ -31,6 +31,7 @@ export const DetectedWineSchema = z.object({
   name: z.string().min(1).max(300),
   producer: z.string().max(200).optional(),
   vintage: z.number().int().min(1900).max(2100).optional(),
+  wineColor: z.enum(["red", "white", "rose", "sparkling"]).optional(),
   country: z.string().max(80).optional(),
   region: z.string().max(120).optional(),
   grapes: z.array(z.string().max(80)).max(8).default([]),

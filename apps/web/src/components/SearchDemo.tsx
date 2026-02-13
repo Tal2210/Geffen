@@ -69,6 +69,7 @@ interface DetectedWine {
   name: string;
   producer?: string;
   vintage?: number;
+  wineColor?: "red" | "white" | "rose" | "sparkling";
   country?: string;
   region?: string;
   grapes?: string[];
@@ -743,6 +744,11 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                   {imageResult.detectedWine.country && (
                     <p>
                       Country: <span className="font-semibold text-slate-900">{imageResult.detectedWine.country}</span>
+                    </p>
+                  )}
+                  {imageResult.detectedWine.wineColor && (
+                    <p>
+                      Color: <span className="font-semibold capitalize text-slate-900">{imageResult.detectedWine.wineColor}</span>
                     </p>
                   )}
                   {imageResult.detectedWine.region && (

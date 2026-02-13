@@ -146,6 +146,7 @@ export class WineImageSearchService {
         '  "name": "required string",',
         '  "producer"?: "string",',
         '  "vintage"?: number,',
+        '  "wineColor"?: "red"|"white"|"rose"|"sparkling",',
         '  "country"?: "string",',
         '  "region"?: "string",',
         '  "grapes"?: string[],',
@@ -155,6 +156,7 @@ export class WineImageSearchService {
         "",
         "Rules:",
         "- Name must be the likely marketed wine name from label.",
+        "- wineColor must be one of: red, white, rose, sparkling.",
         "- Confidence must be 0..1.",
         "- Use concise canonical values where possible.",
         "- If uncertain, omit fields.",
@@ -276,10 +278,12 @@ export class WineImageSearchService {
   }
 
   private buildSemanticQuery(detectedWine: DetectedWine, queryHint?: string): string {
+    const colorTerms = this.colorTerms(this.getDetectedColor(detectedWine));
     const parts = [
       detectedWine.name,
       detectedWine.producer,
       detectedWine.vintage ? String(detectedWine.vintage) : undefined,
+      ...colorTerms,
       detectedWine.country,
       detectedWine.region,
       ...(detectedWine.grapes || []),
@@ -294,7 +298,9 @@ export class WineImageSearchService {
   }
 
   private buildDescriptorQuery(detectedWine: DetectedWine, queryHint?: string): string {
+    const colorTerms = this.colorTerms(this.getDetectedColor(detectedWine));
     const parts = [
+      ...colorTerms,
       detectedWine.country,
       detectedWine.region,
       ...(detectedWine.grapes || []),
@@ -311,7 +317,15 @@ export class WineImageSearchService {
     const style = (detectedWine.styleTags || []).slice(0, 2).join(" ");
     const country = detectedWine.country ? String(detectedWine.country).trim() : "";
     const region = detectedWine.region ? String(detectedWine.region).trim() : "";
-    return [style, country, region, "יין wine red white sparkling"].filter(Boolean).join(" ");
+    const colorTerms = this.colorTerms(this.getDetectedColor(detectedWine));
+    return [...colorTerms, style, country, region, "יין wine"].filter(Boolean).join(" ");
+  }
+
+  private buildColorTargetQuery(detectedWine: DetectedWine): string {
+    const colorTerms = this.colorTerms(this.getDetectedColor(detectedWine));
+    const country = detectedWine.country ? String(detectedWine.country).trim() : "";
+    const region = detectedWine.region ? String(detectedWine.region).trim() : "";
+    return [...colorTerms, country, region, "wine"].filter(Boolean).join(" ");
   }
 
   private async findAlternatives(
@@ -320,7 +334,16 @@ export class WineImageSearchService {
     merchantId: string,
     limit: number
   ): Promise<{ products: WineProduct[]; reason: string }> {
+    const detectedColor = this.getDetectedColor(detectedWine);
     const attempts = [
+      ...(detectedColor
+        ? [
+            {
+              reason: "semantic_color_target",
+              query: this.buildColorTargetQuery(detectedWine),
+            },
+          ]
+        : []),
       {
         reason: "semantic_primary",
         query: this.buildSemanticQuery(detectedWine, queryHint),
@@ -336,13 +359,24 @@ export class WineImageSearchService {
     ].filter((a) => a.query.trim().length > 0);
 
     for (const attempt of attempts) {
-      const products = await this.runSemanticSearch(attempt.query, merchantId, limit);
+      const products = this.applyColorConsistency(
+        await this.runSemanticSearch(attempt.query, merchantId, limit),
+        detectedWine
+      );
       if (products.length > 0) {
-        return { products, reason: attempt.reason };
+        const colorReasonSuffix = detectedColor
+          ? this.hasAnyColorMatch(products, detectedColor)
+            ? "_color_aligned"
+            : "_color_miss"
+          : "";
+        return { products, reason: `${attempt.reason}${colorReasonSuffix}` };
       }
     }
 
-    const catalogFallback = await this.searchCatalogFallback(detectedWine, limit);
+    const catalogFallback = this.applyColorConsistency(
+      await this.searchCatalogFallback(detectedWine, limit),
+      detectedWine
+    );
     if (catalogFallback.length > 0) {
       return { products: catalogFallback, reason: "catalog_name_fallback" };
     }
@@ -385,6 +419,118 @@ export class WineImageSearchService {
       score: Number((doc as any).score || 0.28),
       finalScore: Number((doc as any).finalScore || 0.28),
     })) as WineProduct[];
+  }
+
+  private applyColorConsistency(products: WineProduct[], detectedWine: DetectedWine): WineProduct[] {
+    const detectedColor = this.getDetectedColor(detectedWine);
+    if (!detectedColor || products.length === 0) return products;
+
+    const rescored = products.map((product) => {
+      const isMatch = this.matchesDetectedColor(product, detectedColor);
+      const base = Number((product as any).finalScore || product.score || 0);
+      const adjusted = isMatch ? Math.max(base * 1.25, base + 0.08) : base * 0.55;
+      return {
+        ...product,
+        score: adjusted,
+        finalScore: adjusted,
+      } as WineProduct;
+    });
+
+    rescored.sort(
+      (a, b) =>
+        Number((b as any).finalScore || b.score || 0) -
+        Number((a as any).finalScore || a.score || 0)
+    );
+
+    const matched = rescored.filter((p) => this.matchesDetectedColor(p, detectedColor));
+    if (matched.length >= Math.min(3, Math.max(1, Math.floor(products.length / 3)))) {
+      const unmatched = rescored.filter((p) => !this.matchesDetectedColor(p, detectedColor));
+      return [...matched, ...unmatched];
+    }
+
+    return rescored;
+  }
+
+  private hasAnyColorMatch(products: WineProduct[], detectedColor: "red" | "white" | "rose" | "sparkling"): boolean {
+    return products.some((p) => this.matchesDetectedColor(p, detectedColor));
+  }
+
+  private matchesDetectedColor(
+    product: WineProduct,
+    detectedColor: "red" | "white" | "rose" | "sparkling"
+  ): boolean {
+    const productColor = this.normalizeWineColor(product.color);
+    if (productColor && productColor === detectedColor) return true;
+
+    const categories = Array.isArray(product.category)
+      ? product.category
+      : typeof product.category === "string"
+        ? [product.category]
+        : [];
+    const softCategories = Array.isArray(product.softCategory)
+      ? product.softCategory
+      : typeof product.softCategory === "string"
+        ? [product.softCategory]
+        : [];
+    const text = this.normalizeText(
+      [product.name, product.description, ...categories, ...softCategories]
+        .filter((v): v is string => typeof v === "string")
+        .join(" ")
+    );
+
+    const expectedTerms = this.colorTerms(detectedColor).map((t) => this.normalizeText(t));
+    return expectedTerms.some((term) => term && text.includes(term));
+  }
+
+  private getDetectedColor(
+    detectedWine: DetectedWine
+  ): "red" | "white" | "rose" | "sparkling" | undefined {
+    if (detectedWine.wineColor) return detectedWine.wineColor;
+    const fromTags = (detectedWine.styleTags || [])
+      .map((tag) => this.normalizeWineColor(tag))
+      .find(Boolean);
+    return fromTags;
+  }
+
+  private normalizeWineColor(value: string | undefined): "red" | "white" | "rose" | "sparkling" | undefined {
+    if (!value) return undefined;
+    const normalized = this.normalizeText(value);
+    if (!normalized) return undefined;
+    if (
+      normalized.includes("rose") ||
+      normalized.includes("rosé") ||
+      normalized.includes("רוזה") ||
+      normalized.includes("pink")
+    ) {
+      return "rose";
+    }
+    if (
+      normalized.includes("sparkling") ||
+      normalized.includes("bubbly") ||
+      normalized.includes("מבעבע") ||
+      normalized.includes("שמפניה")
+    ) {
+      return "sparkling";
+    }
+    if (normalized.includes("white") || normalized.includes("לבן")) return "white";
+    if (normalized.includes("red") || normalized.includes("אדום")) return "red";
+    return undefined;
+  }
+
+  private colorTerms(color: "red" | "white" | "rose" | "sparkling" | undefined): string[] {
+    if (!color) return [];
+    switch (color) {
+      case "rose":
+        return ["rosé", "rose wine", "יין רוזה", "רוזה"];
+      case "sparkling":
+        return ["sparkling wine", "יין מבעבע", "שמפניה"];
+      case "white":
+        return ["white wine", "יין לבן", "לבן"];
+      case "red":
+        return ["red wine", "יין אדום", "אדום"];
+      default:
+        return [];
+    }
   }
 
   private pinProductFirst(products: WineProduct[], exactMatch: WineProduct): WineProduct[] {
