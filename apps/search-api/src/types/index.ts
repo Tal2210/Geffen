@@ -19,6 +19,27 @@ export const SearchQuerySchema = z.object({
 
 export type SearchQuery = z.infer<typeof SearchQuerySchema>;
 
+export const ImageSearchRequestSchema = z.object({
+  imageDataUrl: z.string().min(30).max(8_000_000),
+  queryHint: z.string().max(300).optional(),
+  limit: z.number().int().min(1).max(50).default(12),
+});
+
+export type ImageSearchRequest = z.infer<typeof ImageSearchRequestSchema>;
+
+export const DetectedWineSchema = z.object({
+  name: z.string().min(1).max(300),
+  producer: z.string().max(200).optional(),
+  vintage: z.number().int().min(1900).max(2100).optional(),
+  country: z.string().max(80).optional(),
+  region: z.string().max(120).optional(),
+  grapes: z.array(z.string().max(80)).max(8).default([]),
+  styleTags: z.array(z.string().max(80)).max(12).default([]),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
+export type DetectedWine = z.infer<typeof DetectedWineSchema>;
+
 // ============================================================================
 // Extracted Filters (from NER/Query Parsing)
 // ============================================================================
@@ -102,11 +123,31 @@ export interface SearchResult {
     };
     totalResults: number;
     returnedCount: number;
+    retrieval?: {
+      vectorCandidates: number;
+      textCandidates: number;
+      mergedCandidates: number;
+    };
     timings: {
       parsing: number;
       embedding: number;
       vectorSearch: number;
       reranking: number;
+      total: number;
+    };
+  };
+}
+
+export interface ImageSearchResult {
+  detectedWine: DetectedWine;
+  exactMatch: WineProduct | null;
+  alternatives: WineProduct[];
+  metadata: {
+    decision: "exact" | "alternatives";
+    reason: string;
+    timings: {
+      analysis: number;
+      matching: number;
       total: number;
     };
   };

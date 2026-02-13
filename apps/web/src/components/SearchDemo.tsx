@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { resolveProductImageUrl } from "../utils/productImage";
 
 interface WineProduct {
@@ -37,6 +37,11 @@ interface SearchMetadata {
   };
   totalResults: number;
   returnedCount: number;
+  retrieval?: {
+    vectorCandidates: number;
+    textCandidates: number;
+    mergedCandidates: number;
+  };
   timings: {
     parsing: number;
     embedding: number;
@@ -58,6 +63,32 @@ interface SearchDemoProps {
 interface ExplanationResponse {
   intro: string;
   reasons: Array<{ id: string; reason: string }>;
+}
+
+interface DetectedWine {
+  name: string;
+  producer?: string;
+  vintage?: number;
+  country?: string;
+  region?: string;
+  grapes?: string[];
+  styleTags?: string[];
+  confidence?: number;
+}
+
+interface ImageSearchResponse {
+  detectedWine: DetectedWine;
+  exactMatch: WineProduct | null;
+  alternatives: WineProduct[];
+  metadata: {
+    decision: "exact" | "alternatives";
+    reason: string;
+    timings: {
+      analysis: number;
+      matching: number;
+      total: number;
+    };
+  };
 }
 
 const colorTone: Record<string, string> = {
@@ -94,6 +125,10 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const [reasonsById, setReasonsById] = useState<Record<string, string>>({});
   const [explanationIntro, setExplanationIntro] = useState<string>("");
   const [autocompleteOptions, setAutocompleteOptions] = useState<string[]>([]);
+  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [imageSearching, setImageSearching] = useState(false);
+  const [imageResult, setImageResult] = useState<ImageSearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestCounterRef = useRef(0);
@@ -108,6 +143,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
     const q = rawQuery.trim();
     if (!q) {
       setResults(null);
+      setImageResult(null);
       setAutocompleteOptions([]);
       setReasonsById({});
       setExplanationIntro("");
@@ -154,6 +190,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
       if (requestId !== requestCounterRef.current) return;
 
       setResults(data);
+      setImageResult(null);
       setAutocompleteOptions(
         Array.from(
           new Set(
@@ -206,6 +243,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
       if (requestId !== requestCounterRef.current) return;
       setError(err instanceof Error ? err.message : "Search failed");
       setResults(null);
+      setImageResult(null);
       setAutocompleteOptions([]);
     } finally {
       if (mode === "manual") {
@@ -231,6 +269,98 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
   const handleSearch = useCallback(() => {
     void runSearch(query, "manual");
   }, [query, runSearch]);
+
+  const prepareImageDataUrl = useCallback(async (file: File): Promise<string> => {
+    const fileDataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Failed reading image"));
+      reader.readAsDataURL(file);
+    });
+
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Invalid image file"));
+      img.src = fileDataUrl;
+    });
+
+    const maxDim = 1400;
+    const scale = Math.min(1, maxDim / Math.max(image.width, image.height));
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Image processing failed");
+    ctx.drawImage(image, 0, 0, width, height);
+
+    return canvas.toDataURL("image/jpeg", 0.84);
+  }, []);
+
+  const handleImageSelected = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        setError(null);
+        const dataUrl = await prepareImageDataUrl(file);
+        setImageDataUrl(dataUrl);
+        setImagePreviewUrl(dataUrl);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Image preparation failed");
+      } finally {
+        event.target.value = "";
+      }
+    },
+    [prepareImageDataUrl]
+  );
+
+  const runImageSearch = useCallback(async () => {
+    if (!imageDataUrl) return;
+    setImageSearching(true);
+    setError(null);
+    setReasonsById({});
+    setExplanationIntro("");
+    try {
+      const response = await fetch(`${API_URL}/search/by-image`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": API_KEY,
+        },
+        body: JSON.stringify({
+          imageDataUrl,
+          queryHint: query.trim() || undefined,
+          limit: 12,
+        }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.message || `Error ${response.status}`);
+      }
+
+      setImageResult(payload as ImageSearchResponse);
+      setResults(null);
+      setAutocompleteOptions(
+        Array.from(
+          new Set(
+            ((payload as ImageSearchResponse).alternatives || [])
+              .map((p) => p.name?.trim())
+              .filter((name): name is string => Boolean(name))
+          )
+        ).slice(0, 8)
+      );
+    } catch (err) {
+      setImageResult(null);
+      setError(err instanceof Error ? err.message : "Image search failed");
+    } finally {
+      setImageSearching(false);
+    }
+  }, [API_KEY, API_URL, imageDataUrl, query]);
 
   useEffect(() => {
     if (skipNextAutoSearchRef.current) {
@@ -300,6 +430,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
     if (matched.length > 0) return matched;
     return autocompleteOptions.slice(0, 6);
   }, [autocompleteOptions, query]);
+
+  const activeProducts = imageResult ? imageResult.alternatives : (results?.products ?? []);
+  const hasResultsPanel = Boolean(results || imageResult);
 
   return (
     <div className="min-h-screen bg-[#fffdfd] text-slate-900">
@@ -384,6 +517,43 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                 {loading ? "Searching..." : "Run Search"}
               </button>
             </div>
+            <div className="mt-3 flex flex-col gap-3 rounded-xl border border-geffen-100 bg-geffen-50/40 p-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center rounded-lg border border-geffen-200 bg-white px-3 py-2 text-xs font-semibold text-geffen-700 transition hover:border-geffen-400">
+                  Upload Or Camera
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleImageSelected}
+                    className="hidden"
+                  />
+                </label>
+                {imagePreviewUrl && (
+                  <img
+                    src={imagePreviewUrl}
+                    alt="Wine preview"
+                    className="h-12 w-12 rounded-lg border border-geffen-200 object-cover"
+                  />
+                )}
+                <span className="text-xs text-slate-500">
+                  {imageDataUrl ? "Image ready for semantic wine scan." : "Upload a wine bottle image to detect and match."}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  void runImageSearch();
+                }}
+                disabled={!imageDataUrl || imageSearching}
+                className={`h-10 rounded-lg px-5 text-xs font-semibold transition ${
+                  !imageDataUrl || imageSearching
+                    ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                    : "border border-geffen-600 bg-geffen-600 text-white hover:bg-geffen-700"
+                }`}
+              >
+                {imageSearching ? "Scanning..." : "Scan Wine Image"}
+              </button>
+            </div>
             <p className="mt-2 text-[11px] text-slate-500">
               {autoSearching ? "מעדכן תוצאות תוך כדי הקלדה..." : "Autocomplete פעיל - אפשר לבחור תוצאה מהרשימה."}
             </p>
@@ -463,33 +633,53 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
           </div>
         )}
 
-        {results && (
+        {hasResultsPanel && (
           <>
             <section className="mb-8 rounded-2xl border border-geffen-100 bg-white p-4 shadow-xl shadow-geffen-100/30">
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                 <div className="rounded-xl border border-geffen-100 bg-geffen-50 p-3">
                   <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Results</p>
-                  <p className="text-2xl font-semibold text-geffen-700">{results.metadata.totalResults}</p>
+                  <p className="text-2xl font-semibold text-geffen-700">
+                    {imageResult ? imageResult.alternatives.length : results?.metadata.totalResults || 0}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Parsing</p>
-                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.parsing}ms</p>
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                    {imageResult ? "Analysis" : "Parsing"}
+                  </p>
+                  <p className="text-2xl font-semibold text-slate-800">
+                    {imageResult ? `${imageResult.metadata.timings.analysis}ms` : `${results?.metadata.timings.parsing || 0}ms`}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Embedding</p>
-                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.embedding}ms</p>
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                    {imageResult ? "Matching" : "Embedding"}
+                  </p>
+                  <p className="text-2xl font-semibold text-slate-800">
+                    {imageResult ? `${imageResult.metadata.timings.matching}ms` : `${results?.metadata.timings.embedding || 0}ms`}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Vector</p>
-                  <p className="text-2xl font-semibold text-slate-800">{results.metadata.timings.vectorSearch}ms</p>
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">
+                    {imageResult ? "Decision" : "Vector"}
+                  </p>
+                  <p className="text-sm font-semibold text-slate-800 md:text-2xl">
+                    {imageResult
+                      ? imageResult.metadata.decision === "exact"
+                        ? "Exact Match"
+                        : "Alternatives"
+                      : `${results?.metadata.timings.vectorSearch || 0}ms`}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-geffen-200 bg-geffen-50 p-3">
                   <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Total</p>
-                  <p className="text-2xl font-semibold text-geffen-700">{results.metadata.timings.total}ms</p>
+                  <p className="text-2xl font-semibold text-geffen-700">
+                    {imageResult ? `${imageResult.metadata.timings.total}ms` : `${results?.metadata.timings.total || 0}ms`}
+                  </p>
                 </div>
               </div>
 
-              {Object.keys(results.metadata.appliedFilters).length > 0 && (
+              {results && Object.keys(results.metadata.appliedFilters).length > 0 && (
                 <div className="mt-4 rounded-xl border border-geffen-100 bg-geffen-50/60 p-3">
                   <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
                     Active Filters
@@ -527,17 +717,71 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                   </div>
                 </div>
               )}
+
+              {results && results.metadata.retrieval && (
+                <div className="mt-4 rounded-xl border border-geffen-100 bg-white p-3 text-xs text-slate-600">
+                  <span className="font-semibold text-geffen-700">Hybrid retrieval</span>: vector {results.metadata.retrieval.vectorCandidates}, text{" "}
+                  {results.metadata.retrieval.textCandidates}, merged {results.metadata.retrieval.mergedCandidates}
+                </div>
+              )}
             </section>
 
-            {results.products.length === 0 ? (
+            {imageResult && (
+              <section className="mb-6 rounded-2xl border border-geffen-100 bg-white p-4 shadow-sm">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-geffen-700">
+                  Detected Wine
+                </p>
+                <div className="grid grid-cols-1 gap-2 text-sm text-slate-700 md:grid-cols-2">
+                  <p>
+                    Name: <span className="font-semibold text-slate-900">{imageResult.detectedWine.name}</span>
+                  </p>
+                  {imageResult.detectedWine.producer && (
+                    <p>
+                      Producer: <span className="font-semibold text-slate-900">{imageResult.detectedWine.producer}</span>
+                    </p>
+                  )}
+                  {imageResult.detectedWine.country && (
+                    <p>
+                      Country: <span className="font-semibold text-slate-900">{imageResult.detectedWine.country}</span>
+                    </p>
+                  )}
+                  {imageResult.detectedWine.region && (
+                    <p>
+                      Region: <span className="font-semibold text-slate-900">{imageResult.detectedWine.region}</span>
+                    </p>
+                  )}
+                  {typeof imageResult.detectedWine.confidence === "number" && (
+                    <p>
+                      Confidence:{" "}
+                      <span className="font-semibold text-slate-900">
+                        {Math.round(imageResult.detectedWine.confidence * 100)}%
+                      </span>
+                    </p>
+                  )}
+                  {imageResult.detectedWine.styleTags && imageResult.detectedWine.styleTags.length > 0 && (
+                    <p>
+                      Style:{" "}
+                      <span className="font-semibold text-slate-900">
+                        {imageResult.detectedWine.styleTags.slice(0, 5).join(", ")}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {activeProducts.length === 0 ? (
               <div className="py-20 text-center">
                 <p className="text-lg text-slate-700">No wines found</p>
                 <p className="mt-2 text-sm text-slate-500">Try a broader query or remove filters</p>
               </div>
             ) : (
               <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {results.products.map((product) => {
+                {activeProducts.map((product) => {
                   const imageSrc = resolveProductImageUrl(product);
+                  const isExactMatch =
+                    Boolean(imageResult?.exactMatch) &&
+                    String(imageResult?.exactMatch?._id) === String(product._id);
                   return (
                     <article
                       key={product._id}
@@ -559,6 +803,11 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                       </div>
 
                       <div className="p-4">
+                        {isExactMatch && (
+                          <span className="mb-2 inline-flex rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
+                            Exact Match
+                          </span>
+                        )}
                         <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
 
                         {product.description && (
@@ -610,7 +859,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               </section>
             )}
 
-            {explanationIntro && (
+            {results && explanationIntro && (
               <div className="mt-5 rounded-xl border border-geffen-200 bg-geffen-50/70 px-4 py-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
                   סיכום התאמה (LLM)
@@ -621,7 +870,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
           </>
         )}
 
-        {!results && !error && !loading && (
+        {!hasResultsPanel && !error && !loading && !imageSearching && (
           <section className="py-24 text-center">
             <p className="mb-2 text-sm uppercase tracking-[0.18em] text-geffen-700">Geffen Search</p>
             <h2 className="mb-3 text-2xl font-semibold text-slate-900">Ask in natural language</h2>

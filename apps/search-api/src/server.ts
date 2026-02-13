@@ -11,6 +11,7 @@ import { BoostRuleService } from "./services/boostRuleService.js";
 import { ProductCatalogService } from "./services/productCatalogService.js";
 import { AcademyChatService } from "./services/academyChatService.js";
 import { AcademyMetricsService } from "./services/academyMetricsService.js";
+import { WineImageSearchService } from "./services/wineImageSearchService.js";
 import { createSearchRoutes } from "./routes/search.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rateLimit.js";
@@ -81,6 +82,7 @@ async function buildServer() {
   const academyMetricsService = new AcademyMetricsService(env);
   const academyChatService = new AcademyChatService(env, academyMetricsService);
   const searchService = new SearchService(env, boostRuleService);
+  const wineImageSearchService = new WineImageSearchService(env, searchService, productCatalogService);
   const productExplanationService = new ProductExplanationService(env);
   await boostRuleService.connect();
   await productCatalogService.connect();
@@ -112,7 +114,8 @@ async function buildServer() {
       boostRuleService,
       productCatalogService,
       academyChatService,
-      academyMetricsService
+      academyMetricsService,
+      wineImageSearchService
     )
   );
 

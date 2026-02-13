@@ -1,12 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { SearchQuerySchema } from "../types/index.js";
+import { ImageSearchRequestSchema, SearchQuerySchema } from "../types/index.js";
 import type { SearchService } from "../services/searchService.js";
 import type { ProductExplanationService } from "../services/productExplanationService.js";
 import type { BoostRuleService } from "../services/boostRuleService.js";
 import type { ProductCatalogService } from "../services/productCatalogService.js";
 import type { AcademyChatService } from "../services/academyChatService.js";
 import type { AcademyMetricsService } from "../services/academyMetricsService.js";
+import type { WineImageSearchService } from "../services/wineImageSearchService.js";
 import { getMerchantId } from "../middleware/auth.js";
 
 const ExplainRequestSchema = z.object({
@@ -90,7 +91,8 @@ export function createSearchRoutes(
   boostRuleService: BoostRuleService,
   productCatalogService: ProductCatalogService,
   academyChatService: AcademyChatService,
-  academyMetricsService: AcademyMetricsService
+  academyMetricsService: AcademyMetricsService,
+  wineImageSearchService: WineImageSearchService
 ): FastifyPluginAsync {
   return async (server) => {
     /**
@@ -116,6 +118,16 @@ export function createSearchRoutes(
 
       try {
         const result = await searchService.search(parsed.data);
+        server.log.info(
+          {
+            merchantId,
+            query: parsed.data.query,
+            totalResults: result.metadata.totalResults,
+            retrieval: result.metadata.retrieval,
+            timings: result.metadata.timings,
+          },
+          "Search completed"
+        );
 
         // Add performance headers
         reply.header("X-Search-Time", result.metadata.timings.total.toString());
@@ -131,6 +143,50 @@ export function createSearchRoutes(
         return reply.status(500).send({
           error: "search_failed",
           message: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    });
+
+    server.post("/search/by-image", async (request, reply) => {
+      const merchantId = getMerchantId(request);
+      const parsed = ImageSearchRequestSchema.safeParse(request.body as any);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const result = await wineImageSearchService.searchByImage({
+          imageDataUrl: parsed.data.imageDataUrl,
+          queryHint: parsed.data.queryHint,
+          merchantId,
+          limit: parsed.data.limit,
+        });
+
+        server.log.info(
+          {
+            merchantId,
+            decision: result.metadata.decision,
+            reason: result.metadata.reason,
+            exactMatch: result.exactMatch ? String((result.exactMatch as any)._id) : null,
+            alternativesCount: result.alternatives.length,
+            timings: result.metadata.timings,
+          },
+          "Image search completed"
+        );
+
+        return reply.send(result);
+      } catch (error) {
+        const normalized = wineImageSearchService.toPublicError(error);
+        server.log.error(
+          { error, merchantId, code: normalized.code, statusCode: normalized.statusCode },
+          "Image search failed"
+        );
+        return reply.status(normalized.statusCode).send({
+          error: normalized.code,
+          message: normalized.message,
         });
       }
     });

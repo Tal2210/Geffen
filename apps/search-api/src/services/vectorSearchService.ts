@@ -1,6 +1,12 @@
 import { MongoClient, ObjectId, type Db, type Collection } from "mongodb";
 import type { ExtractedFilters, VectorSearchHit, Env } from "../types/index.js";
 
+type BuiltTextQuery = {
+  match: Record<string, any>;
+  terms: string[];
+  normalizedQuery: string;
+};
+
 /**
  * MongoDB Atlas Vector Search Service
  * Performs ANN search with pre-filtering for multi-tenant support
@@ -131,8 +137,9 @@ export class VectorSearchService {
     limit: number = 50
   ): Promise<VectorSearchHit[]> {
     const preFilter = this.buildPreFilter(extractedFilters);
-    const textQuery = this.buildTextQuery(query);
-    if (!textQuery) return [];
+    const builtQuery = this.buildTextQuery(query);
+    if (!builtQuery) return [];
+    const textQuery = builtQuery.match;
 
     const match: any =
       Object.keys(preFilter).length > 0 ? { $and: [preFilter, textQuery] } : textQuery;
@@ -181,7 +188,7 @@ export class VectorSearchService {
       return {
         ...normalized,
         _id: doc._id.toString(),
-        score: 1.0,
+        score: this.computeTextCoverageScore(doc, builtQuery.terms, builtQuery.normalizedQuery),
       };
     }) as VectorSearchHit[];
   }
@@ -442,7 +449,7 @@ export class VectorSearchService {
     return preFilter;
   }
 
-  private buildTextQuery(query: string): Record<string, any> | null {
+  private buildTextQuery(query: string): BuiltTextQuery | null {
     const normalizedQuery = query
       .replace(/[\u0591-\u05C7]/g, "") // Remove Hebrew diacritics
       .replace(/ש?מתאי(?:ם|מה|מות|מים)?/g, " ")
@@ -514,8 +521,48 @@ export class VectorSearchService {
       };
     });
 
-    if (perTerm.length === 1) return perTerm[0] as Record<string, any>;
-    return { $and: perTerm };
+    const match = perTerm.length === 1 ? (perTerm[0] as Record<string, any>) : { $and: perTerm };
+    return {
+      match,
+      terms,
+      normalizedQuery,
+    };
+  }
+
+  private computeTextCoverageScore(
+    doc: any,
+    terms: string[],
+    normalizedQuery: string
+  ): number {
+    if (terms.length === 0) return 0.2;
+    const candidate = this.normalizeForTextSearch([
+      doc?.name,
+      doc?.description,
+      doc?.short_description,
+      doc?.country,
+      doc?.region,
+      ...(Array.isArray(doc?.category) ? doc.category : [doc?.category]),
+      ...(Array.isArray(doc?.softCategory) ? doc.softCategory : [doc?.softCategory]),
+      ...(Array.isArray(doc?.grapes) ? doc.grapes : []),
+    ]
+      .filter((v) => typeof v === "string")
+      .join(" "));
+
+    if (!candidate) return 0.2;
+
+    const hits = terms.filter((term) => candidate.includes(this.normalizeForTextSearch(term))).length;
+    const coverage = hits / terms.length;
+    const phraseBonus = candidate.includes(normalizedQuery) ? 0.15 : 0;
+    return Math.min(1, 0.25 + coverage * 0.7 + phraseBonus);
+  }
+
+  private normalizeForTextSearch(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[\u0591-\u05C7]/g, "")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   /**

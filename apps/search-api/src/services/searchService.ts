@@ -113,7 +113,6 @@ export class SearchService {
       // Parsed filters are best-effort hints and can easily over-filter to 0 results
       // if the merchant catalog doesn't reliably populate those attributes.
       const extractedFilters = { ...mergedFilters };
-      const preFilters = {};
 
       // Merge with explicit filters from request
       if (query.minPrice) {
@@ -240,46 +239,43 @@ export class SearchService {
       const cleanedQuery = this.parser.cleanQuery(query.query, mergedFilters);
       timings.parsing = Date.now() - startParsing;
 
-      // 2. Hybrid: try strict textual match first, fallback to semantic
-      const startTextSearch = Date.now();
-      const textResults = await this.vectorSearch.textSearch(
-        query.query,
-        preFilterObj,
-        50
-      );
-      let usedText = textResults.length > 0;
-      timings.vectorSearch = Date.now() - startTextSearch;
+      // 2. Always-on hybrid retrieval: text and semantic run together, then merge.
+      const startEmbedding = Date.now();
+      const startVectorRetrieval = Date.now();
+      const textSearchPromise = this.vectorSearch.textSearch(query.query, preFilterObj, 50);
+      const embeddingPromise = this.embeddingService.generateEmbedding(cleanedQuery);
 
-      let baseResults: any[] = textResults;
+      const [textResultSet, embeddingResultSet] = await Promise.allSettled([
+        textSearchPromise,
+        embeddingPromise,
+      ]);
 
-      // Fast category fallback for mixed-intent queries when strict text search misses.
-      // This avoids unnecessary embedding calls and prevents zero-results on known categories.
-      if (!usedText && hardCategorySet.size > 0) {
-        const categoryFastFallback = await this.vectorSearch.fetchProductsByCategories(
-          Array.from(hardCategorySet),
-          50
-        );
-        if (categoryFastFallback.length > 0) {
-          baseResults = categoryFastFallback;
-          usedText = true;
-        }
+      const textResults = textResultSet.status === "fulfilled" ? textResultSet.value : [];
+      if (textResultSet.status === "rejected") {
+        console.warn("Text search failed in hybrid path:", textResultSet.reason);
       }
 
-      if (!usedText) {
-        // 3. Semantic search
-        const startEmbedding = Date.now();
-        const embedding = await this.embeddingService.generateEmbedding(cleanedQuery);
+      let vectorResults: any[] = [];
+      if (embeddingResultSet.status === "fulfilled") {
         timings.embedding = Date.now() - startEmbedding;
-
-        const startVectorSearch = Date.now();
-        baseResults = await this.vectorSearch.search(
-          embedding,
+        vectorResults = await this.vectorSearch.search(
+          embeddingResultSet.value,
           query.merchantId,
           preFilterObj,
-          50 // Retrieve more candidates for reranking
+          50
         );
-        timings.vectorSearch = Date.now() - startVectorSearch;
+      } else {
+        timings.embedding = Date.now() - startEmbedding;
+        console.warn("Embedding generation failed in hybrid path:", embeddingResultSet.reason);
       }
+
+      const baseResults = this.mergeHybridCandidates(vectorResults, textResults);
+      const retrievalBreakdown = {
+        vectorCandidates: vectorResults.length,
+        textCandidates: textResults.length,
+        mergedCandidates: baseResults.length,
+      };
+      timings.vectorSearch = Date.now() - startVectorRetrieval;
 
       // Apply HARD filters again after retrieval to guarantee strictness
       const applyHardConstraints = (results: any[]) =>
@@ -327,9 +323,8 @@ export class SearchService {
         });
       let hardFilteredResults = applyHardConstraints(baseResults);
 
-      // Semantic fallback for mixed-intent queries (e.g. "יין אדום לפיצה"):
-      // if vector path produced no results after hard filtering, fallback by explicit category fetch.
-      if (!usedText && hardFilteredResults.length === 0 && hardCategorySet.size > 0) {
+      // Deterministic category fallback when hard constraints are explicit and retrieval is empty.
+      if (hardFilteredResults.length === 0 && hardCategorySet.size > 0) {
         const categoryFallbackResults = await this.vectorSearch.fetchProductsByCategories(
           Array.from(hardCategorySet),
           50
@@ -487,6 +482,7 @@ export class SearchService {
           },
           totalResults: finalResults.length,
           returnedCount: paginatedResults.length,
+          retrieval: retrievalBreakdown,
           timings,
         },
       };
@@ -494,6 +490,76 @@ export class SearchService {
       console.error("Search failed:", error);
       throw error;
     }
+  }
+
+  private mergeHybridCandidates(vectorResults: any[], textResults: any[]): any[] {
+    const byId = new Map<
+      string,
+      {
+        product: any;
+        semanticScore: number;
+        textScore: number;
+      }
+    >();
+
+    for (const product of vectorResults || []) {
+      const id = String(product?._id || "");
+      if (!id) continue;
+      byId.set(id, {
+        product,
+        semanticScore: this.normalizeScore(product?.score),
+        textScore: 0,
+      });
+    }
+
+    for (const product of textResults || []) {
+      const id = String(product?._id || "");
+      if (!id) continue;
+      const existing = byId.get(id);
+      const textScore = this.normalizeScore(product?.score);
+      if (!existing) {
+        byId.set(id, {
+          product,
+          semanticScore: 0,
+          textScore,
+        });
+      } else {
+        byId.set(id, {
+          product: { ...existing.product, ...product },
+          semanticScore: existing.semanticScore,
+          textScore: Math.max(existing.textScore, textScore),
+        });
+      }
+    }
+
+    const merged = Array.from(byId.values()).map(({ product, semanticScore, textScore }) => {
+      const hasSemantic = semanticScore > 0;
+      const hasText = textScore > 0;
+
+      let retrievalScore = semanticScore * 0.78 + textScore * 0.22;
+      if (hasSemantic && hasText) retrievalScore += 0.08;
+      if (!hasSemantic && hasText) retrievalScore = 0.25 + textScore * 0.5;
+      if (hasSemantic && !hasText) retrievalScore = Math.max(retrievalScore, semanticScore * 0.72);
+      retrievalScore = Math.min(1, retrievalScore);
+
+      return {
+        ...product,
+        semanticScore,
+        textScore,
+        score: retrievalScore,
+      };
+    });
+
+    merged.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+    return merged;
+  }
+
+  private normalizeScore(score: unknown): number {
+    const n = typeof score === "number" ? score : Number(score || 0);
+    if (!Number.isFinite(n)) return 0;
+    if (n <= 0) return 0;
+    if (n >= 1) return 1;
+    return n;
   }
 
   private applyPinnedOrdering(results: any[]): any[] {
