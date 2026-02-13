@@ -128,6 +128,7 @@ export interface SearchResult {
       vectorCandidates: number;
       textCandidates: number;
       mergedCandidates: number;
+      mode?: "text_only" | "hybrid";
     };
     timings: {
       parsing: number;

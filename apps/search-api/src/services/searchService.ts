@@ -239,41 +239,48 @@ export class SearchService {
       const cleanedQuery = this.parser.cleanQuery(query.query, mergedFilters);
       timings.parsing = Date.now() - startParsing;
 
-      // 2. Always-on hybrid retrieval: text and semantic run together, then merge.
-      const startEmbedding = Date.now();
       const startVectorRetrieval = Date.now();
-      const textSearchPromise = this.vectorSearch.textSearch(query.query, preFilterObj, 50);
-      const embeddingPromise = this.embeddingService.generateEmbedding(cleanedQuery);
-
-      const [textResultSet, embeddingResultSet] = await Promise.allSettled([
-        textSearchPromise,
-        embeddingPromise,
-      ]);
+      const textResultSet = await Promise.resolve(this.vectorSearch.textSearch(query.query, preFilterObj, 50))
+        .then((value) => ({ status: "fulfilled" as const, value }))
+        .catch((reason) => ({ status: "rejected" as const, reason }));
 
       const textResults = textResultSet.status === "fulfilled" ? textResultSet.value : [];
       if (textResultSet.status === "rejected") {
-        console.warn("Text search failed in hybrid path:", textResultSet.reason);
+        console.warn("Text search failed in adaptive path:", textResultSet.reason);
       }
 
+      const useTextOnly = this.isTextStrongEnough(textResults, query.limit);
       let vectorResults: any[] = [];
-      if (embeddingResultSet.status === "fulfilled") {
-        timings.embedding = Date.now() - startEmbedding;
-        vectorResults = await this.vectorSearch.search(
-          embeddingResultSet.value,
-          query.merchantId,
-          preFilterObj,
-          50
-        );
-      } else {
-        timings.embedding = Date.now() - startEmbedding;
-        console.warn("Embedding generation failed in hybrid path:", embeddingResultSet.reason);
+      if (!useTextOnly) {
+        const startEmbedding = Date.now();
+        const embeddingResultSet = await Promise.resolve(
+          this.embeddingService.generateEmbedding(cleanedQuery)
+        )
+          .then((value) => ({ status: "fulfilled" as const, value }))
+          .catch((reason) => ({ status: "rejected" as const, reason }));
+
+        if (embeddingResultSet.status === "fulfilled") {
+          timings.embedding = Date.now() - startEmbedding;
+          vectorResults = await this.vectorSearch.search(
+            embeddingResultSet.value,
+            query.merchantId,
+            preFilterObj,
+            50
+          );
+        } else {
+          timings.embedding = Date.now() - startEmbedding;
+          console.warn("Embedding generation failed in adaptive path:", embeddingResultSet.reason);
+        }
       }
 
-      const baseResults = this.mergeHybridCandidates(vectorResults, textResults);
+      const baseResults = useTextOnly
+        ? this.mergeHybridCandidates([], textResults)
+        : this.mergeHybridCandidates(vectorResults, textResults);
       const retrievalBreakdown = {
         vectorCandidates: vectorResults.length,
         textCandidates: textResults.length,
         mergedCandidates: baseResults.length,
+        mode: useTextOnly ? ("text_only" as const) : ("hybrid" as const),
       };
       timings.vectorSearch = Date.now() - startVectorRetrieval;
 
@@ -552,6 +559,22 @@ export class SearchService {
 
     merged.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
     return merged;
+  }
+
+  private isTextStrongEnough(textResults: any[], requestedLimit: number): boolean {
+    if (!textResults || textResults.length === 0) return false;
+
+    const sorted = [...textResults].sort(
+      (a, b) => Number(b?.score || 0) - Number(a?.score || 0)
+    );
+    const topScore = this.normalizeScore(sorted[0]?.score);
+    const topThree = sorted.slice(0, 3).map((item) => this.normalizeScore(item?.score));
+    const topThreeAvg =
+      topThree.length > 0 ? topThree.reduce((sum, n) => sum + n, 0) / topThree.length : 0;
+    const strongTextHits = sorted.filter((item) => this.normalizeScore(item?.score) >= 0.62).length;
+    const countThreshold = Math.max(3, Math.min(7, Math.ceil(Math.max(4, requestedLimit) * 0.5)));
+
+    return topScore >= 0.8 && topThreeAvg >= 0.68 && strongTextHits >= countThreshold;
   }
 
   private normalizeScore(score: unknown): number {
