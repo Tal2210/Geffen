@@ -120,6 +120,33 @@ function formatIls(value: number): string {
   }).format(value);
 }
 
+function normalizeForAutocomplete(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildTextMatchedAutocompleteOptions(products: WineProduct[], query: string): string[] {
+  const normalizedQuery = normalizeForAutocomplete(query);
+  if (!normalizedQuery) return [];
+  const queryTerms = normalizedQuery.split(/\s+/).filter((term) => term.length > 1);
+  if (queryTerms.length === 0) return [];
+
+  return Array.from(
+    new Set(
+      (products || [])
+        .map((product) => product.name?.trim())
+        .filter((name): name is string => Boolean(name))
+        .filter((name) => {
+          const normalizedName = normalizeForAutocomplete(name);
+          return queryTerms.some((term) => normalizedName.includes(term));
+        })
+    )
+  ).slice(0, 8);
+}
+
 export function SearchDemo({ onBack }: SearchDemoProps) {
   const [query, setQuery] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
@@ -197,14 +224,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
 
       setResults(data);
       setImageResult(null);
+      const hasTextMatches = (data.metadata?.retrieval?.textCandidates || 0) > 0;
       setAutocompleteOptions(
-        Array.from(
-          new Set(
-            (data.products || [])
-              .map((p) => p.name?.trim())
-              .filter((name): name is string => Boolean(name))
-          )
-        ).slice(0, 8)
+        hasTextMatches ? buildTextMatchedAutocompleteOptions(data.products || [], q) : []
       );
       setReasonsById({});
       setExplanationIntro("");
@@ -351,15 +373,7 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
 
       setImageResult(payload as ImageSearchResponse);
       setResults(null);
-      setAutocompleteOptions(
-        Array.from(
-          new Set(
-            ((payload as ImageSearchResponse).alternatives || [])
-              .map((p) => p.name?.trim())
-              .filter((name): name is string => Boolean(name))
-          )
-        ).slice(0, 8)
-      );
+      setAutocompleteOptions([]);
     } catch (err) {
       setImageResult(null);
       setError(err instanceof Error ? err.message : "Image search failed");
@@ -406,19 +420,12 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
 
   const colors = ["red", "white", "rosé", "sparkling"];
   const visibleAutocompleteOptions = useMemo(() => {
-    const normalize = (value: string) =>
-      value
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const q = normalize(query);
+    const q = normalizeForAutocomplete(query);
     if (!q) return [];
     const queryTerms = q.split(/\s+/).filter((t) => t.length > 1);
 
     const scored = autocompleteOptions.map((name) => {
-      const normalizedName = normalize(name);
+      const normalizedName = normalizeForAutocomplete(name);
       if (normalizedName.includes(q)) return { name, score: 100 };
       const termHits = queryTerms.reduce(
         (sum, term) => sum + (normalizedName.includes(term) ? 1 : 0),
