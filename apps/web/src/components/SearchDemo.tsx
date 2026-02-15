@@ -82,10 +82,20 @@ interface DetectedWine {
 interface ImageSearchResponse {
   detectedWine: DetectedWine;
   exactMatch: WineProduct | null;
+  textualMatches: WineProduct[];
   alternatives: WineProduct[];
   metadata: {
     decision: "exact" | "alternatives";
+    searchStrategy?: "text_first_then_vector";
     reason: string;
+    textualCount?: number;
+    alternativesCount?: number;
+    vectorAttempted?: boolean;
+    vectorUsedAsFallback?: boolean;
+    messages?: {
+      textualSection?: string;
+      alternativesSection?: string;
+    };
     derivedTags: string[];
     tagSource: "llm_catalog_context" | "catalog_fallback";
     timings: {
@@ -444,8 +454,101 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
     return autocompleteOptions.slice(0, 6);
   }, [autocompleteOptions, query]);
 
-  const activeProducts = imageResult ? imageResult.alternatives : (results?.products ?? []);
+  const imageTextualMatches = useMemo(() => {
+    if (!imageResult) return [];
+    if (Array.isArray(imageResult.textualMatches) && imageResult.textualMatches.length > 0) {
+      return imageResult.textualMatches;
+    }
+    return imageResult.exactMatch ? [imageResult.exactMatch] : [];
+  }, [imageResult]);
+
+  const imageAlternativeProducts = useMemo(() => {
+    if (!imageResult) return [];
+    const textualIds = new Set(imageTextualMatches.map((p) => String(p._id)));
+    return (imageResult.alternatives || []).filter((p) => !textualIds.has(String(p._id)));
+  }, [imageResult, imageTextualMatches]);
+
+  const activeProducts = results?.products ?? [];
   const hasResultsPanel = Boolean(results || imageResult);
+  const renderProductCard = (product: WineProduct, opts?: { showExactBadge?: boolean }) => {
+    const imageSrc = resolveProductImageUrl(product);
+    const isExactMatch =
+      Boolean(opts?.showExactBadge) &&
+      Boolean(imageResult?.exactMatch) &&
+      String(imageResult?.exactMatch?._id) === String(product._id);
+
+    return (
+      <article
+        key={product._id}
+        className="group overflow-hidden rounded-2xl border border-geffen-100 bg-white transition hover:border-geffen-300 hover:shadow-lg"
+      >
+        <div className="relative flex h-44 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white">
+          {imageSrc ? (
+            <img
+              src={imageSrc}
+              alt={product.name}
+              className="h-full w-full object-contain p-1 opacity-95 transition group-hover:opacity-100"
+            />
+          ) : (
+            <div className="flex items-center gap-3 text-geffen-500">
+              <div className={`h-3 w-3 rounded-full ${colorTone[product.color || ""] || "bg-geffen-400"}`} />
+              <span className="text-xs uppercase tracking-[0.18em]">No Image</span>
+            </div>
+          )}
+        </div>
+
+        <div className="p-4">
+          {isExactMatch && (
+            <span className="mb-2 inline-flex rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
+              Exact Match
+            </span>
+          )}
+          <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
+
+          {product.description && (
+            <p className="mb-3 line-clamp-3 text-xs text-slate-500">{toPlainText(product.description)}</p>
+          )}
+
+          {reasonsById[product._id] && (
+            <div className="mb-3 rounded-lg border border-geffen-200 bg-geffen-50 px-2.5 py-2">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                למה זה מתאים לשאילתה
+              </p>
+              <p className="text-xs leading-5 text-geffen-800">{reasonsById[product._id]}</p>
+            </div>
+          )}
+
+          <div className="mb-3 space-y-1 text-xs text-slate-500">
+            {product.color && (
+              <p>
+                Color: <span className="capitalize text-slate-800">{product.color}</span>
+              </p>
+            )}
+            {product.country && (
+              <p>
+                Country: <span className="capitalize text-slate-800">{product.country}</span>
+              </p>
+            )}
+            {product.grapes && product.grapes.length > 0 && (
+              <p>
+                Grapes: <span className="capitalize text-slate-800">{product.grapes.slice(0, 2).join(", ")}</span>
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-end justify-between border-t border-geffen-100 pt-3">
+            <p className="text-xl font-semibold text-geffen-700">{formatIls(product.price)}</p>
+            <div className="text-right">
+              <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match</p>
+              <p className="text-sm font-semibold text-geffen-700">
+                {Math.round((product.finalScore || product.score) * 100)}%
+              </p>
+            </div>
+          </div>
+        </div>
+      </article>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#fffdfd] text-slate-900">
@@ -653,7 +756,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                 <div className="rounded-xl border border-geffen-100 bg-geffen-50 p-3">
                   <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Results</p>
                   <p className="text-2xl font-semibold text-geffen-700">
-                    {imageResult ? imageResult.alternatives.length : results?.metadata.totalResults || 0}
+                    {imageResult
+                      ? imageTextualMatches.length + imageAlternativeProducts.length
+                      : results?.metadata.totalResults || 0}
                   </p>
                 </div>
                 <div className="rounded-xl border border-geffen-100 bg-white p-3">
@@ -678,9 +783,9 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                   </p>
                   <p className="text-sm font-semibold text-slate-800 md:text-2xl">
                     {imageResult
-                      ? imageResult.metadata.decision === "exact"
-                        ? "Exact Match"
-                        : "Alternatives"
+                      ? imageResult.metadata.vectorUsedAsFallback
+                        ? "Vector Fallback"
+                        : "Text First"
                       : `${results?.metadata.timings.vectorSearch || 0}ms`}
                   </p>
                 </div>
@@ -740,6 +845,19 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
                   )}
                   {results.metadata.retrieval.vectorStatus && (
                     <span> | vector: {results.metadata.retrieval.vectorStatus}</span>
+                  )}
+                </div>
+              )}
+
+              {imageResult && (
+                <div className="mt-4 rounded-xl border border-geffen-100 bg-white p-3 text-xs text-slate-600">
+                  <span className="font-semibold text-geffen-700">Image strategy</span>: textual {imageTextualMatches.length}, alternatives{" "}
+                  {imageAlternativeProducts.length}
+                  {typeof imageResult.metadata.vectorAttempted === "boolean" && (
+                    <span> | vector attempted: {imageResult.metadata.vectorAttempted ? "yes" : "no"}</span>
+                  )}
+                  {typeof imageResult.metadata.vectorUsedAsFallback === "boolean" && (
+                    <span> | vector fallback: {imageResult.metadata.vectorUsedAsFallback ? "yes" : "no"}</span>
                   )}
                 </div>
               )}
@@ -811,92 +929,61 @@ export function SearchDemo({ onBack }: SearchDemoProps) {
               </section>
             )}
 
-            {activeProducts.length === 0 ? (
+            {imageResult ? (
+              <div className="space-y-6">
+                <section className="rounded-2xl border border-geffen-100 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                      התאמה טקסטואלית במלאי
+                    </h3>
+                    <span className="text-xs text-slate-500">{imageTextualMatches.length} מוצרים</span>
+                  </div>
+                  {imageTextualMatches.length === 0 ? (
+                    <div className="rounded-xl border border-geffen-100 bg-geffen-50/40 px-4 py-6 text-center">
+                      <p className="text-sm text-slate-700">
+                        {imageResult.metadata.messages?.textualSection || "לא מצאנו בדיוק את מה שחיפשת"}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {imageTextualMatches.map((product) =>
+                        renderProductCard(product, { showExactBadge: true })
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                <section className="rounded-2xl border border-geffen-100 bg-white p-4 shadow-sm">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                      {imageTextualMatches.length === 0
+                        ? "לא מצאנו בדיוק את מה שחיפשת, הנה חלופות מתאימות"
+                        : "חלופות דומות"}
+                    </h3>
+                    <span className="text-xs text-slate-500">{imageAlternativeProducts.length} מוצרים</span>
+                  </div>
+                  <p className="mb-3 text-xs text-slate-500">
+                    {imageResult.metadata.messages?.alternativesSection || "הנה משהו שמתאים"}
+                  </p>
+                  {imageAlternativeProducts.length === 0 ? (
+                    <div className="rounded-xl border border-geffen-100 bg-geffen-50/40 px-4 py-6 text-center">
+                      <p className="text-sm text-slate-700">לא נמצאו כרגע חלופות מתאימות</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {imageAlternativeProducts.map((product) => renderProductCard(product))}
+                    </div>
+                  )}
+                </section>
+              </div>
+            ) : activeProducts.length === 0 ? (
               <div className="py-20 text-center">
                 <p className="text-lg text-slate-700">No wines found</p>
                 <p className="mt-2 text-sm text-slate-500">Try a broader query or remove filters</p>
               </div>
             ) : (
               <section className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {activeProducts.map((product) => {
-                  const imageSrc = resolveProductImageUrl(product);
-                  const isExactMatch =
-                    Boolean(imageResult?.exactMatch) &&
-                    String(imageResult?.exactMatch?._id) === String(product._id);
-                  return (
-                    <article
-                      key={product._id}
-                      className="group overflow-hidden rounded-2xl border border-geffen-100 bg-white transition hover:border-geffen-300 hover:shadow-lg"
-                    >
-                      <div className="relative flex h-44 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white">
-                        {imageSrc ? (
-                          <img
-                            src={imageSrc}
-                            alt={product.name}
-                            className="h-full w-full object-contain p-1 opacity-95 transition group-hover:opacity-100"
-                          />
-                        ) : (
-                          <div className="flex items-center gap-3 text-geffen-500">
-                            <div className={`h-3 w-3 rounded-full ${colorTone[product.color || ""] || "bg-geffen-400"}`} />
-                            <span className="text-xs uppercase tracking-[0.18em]">No Image</span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="p-4">
-                        {isExactMatch && (
-                          <span className="mb-2 inline-flex rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-700">
-                            Exact Match
-                          </span>
-                        )}
-                        <h3 className="mb-1 line-clamp-2 text-sm font-semibold text-slate-900">{product.name}</h3>
-
-                        {product.description && (
-                          <p className="mb-3 line-clamp-3 text-xs text-slate-500">
-                            {toPlainText(product.description)}
-                          </p>
-                        )}
-
-                        {reasonsById[product._id] && (
-                          <div className="mb-3 rounded-lg border border-geffen-200 bg-geffen-50 px-2.5 py-2">
-                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                              למה זה מתאים לשאילתה
-                            </p>
-                            <p className="text-xs leading-5 text-geffen-800">{reasonsById[product._id]}</p>
-                          </div>
-                        )}
-
-                        <div className="mb-3 space-y-1 text-xs text-slate-500">
-                          {product.color && (
-                            <p>
-                              Color: <span className="capitalize text-slate-800">{product.color}</span>
-                            </p>
-                          )}
-                          {product.country && (
-                            <p>
-                              Country: <span className="capitalize text-slate-800">{product.country}</span>
-                            </p>
-                          )}
-                          {product.grapes && product.grapes.length > 0 && (
-                            <p>
-                              Grapes: <span className="capitalize text-slate-800">{product.grapes.slice(0, 2).join(", ")}</span>
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex items-end justify-between border-t border-geffen-100 pt-3">
-                          <p className="text-xl font-semibold text-geffen-700">{formatIls(product.price)}</p>
-                          <div className="text-right">
-                            <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Match</p>
-                            <p className="text-sm font-semibold text-geffen-700">
-                              {Math.round((product.finalScore || product.score) * 100)}%
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
+                {activeProducts.map((product) => renderProductCard(product))}
               </section>
             )}
 

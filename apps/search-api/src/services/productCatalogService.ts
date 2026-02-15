@@ -6,6 +6,16 @@ type CatalogProduct = {
   name: string;
   description?: string;
   price: number;
+  color?: string;
+  country?: string;
+  region?: string;
+  grapes?: string[];
+  vintage?: number;
+  sweetness?: string;
+  category?: string[] | string;
+  softCategory?: string[] | string;
+  inStock?: boolean;
+  stockCount?: number;
   imageUrl?: string;
   image_url?: string;
   image?: { url?: string; src?: string } | string;
@@ -63,6 +73,16 @@ export class ProductCatalogService {
         name: 1,
         description: 1,
         price: 1,
+        color: 1,
+        country: 1,
+        region: 1,
+        grapes: 1,
+        vintage: 1,
+        sweetness: 1,
+        category: 1,
+        softCategory: 1,
+        inStock: 1,
+        stockCount: 1,
         imageUrl: 1,
         image_url: 1,
         image: 1,

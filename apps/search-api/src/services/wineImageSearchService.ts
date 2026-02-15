@@ -67,38 +67,57 @@ export class WineImageSearchService {
     const analysisMs = Date.now() - startAnalysis;
 
     const startMatching = Date.now();
-    const exactMatch = await this.findStrictExactMatch(detectedWine);
-    const searchLimit = Math.min(50, Math.max(input.limit * 2, exactMatch ? 20 : 16));
+    const textualMatches = await this.findTextualMatches(detectedWine, 3);
+    const exactMatch = textualMatches[0] || null;
+    const textualIds = new Set(textualMatches.map((p) => String(p._id)));
+    const searchLimit = Math.min(50, Math.max(input.limit * 2, textualMatches.length > 0 ? 24 : 16));
     const alternativesSearch = await this.findAlternatives(
       detectedWine,
       input.queryHint,
       input.merchantId,
-      searchLimit
+      searchLimit,
+      textualIds,
+      textualMatches.length
     );
 
-    let alternatives = alternativesSearch.products;
-    if (exactMatch) {
-      alternatives = this.pinProductFirst(alternatives, exactMatch);
-    }
+    const alternatives = alternativesSearch.products;
+    const textualMatchesOutput = textualMatches.slice(0, 3);
+    const alternativesOutput = alternatives.slice(0, input.limit);
     const startTagging = Date.now();
     const taggingResult = await this.deriveWineTags(
       detectedWine,
       exactMatch,
-      alternatives.slice(0, 8)
+      [...textualMatches, ...alternatives].slice(0, 8)
     );
     const taggingMs = Date.now() - startTagging;
 
     const matchingMs = Date.now() - startMatching;
     const totalMs = Date.now() - startTotal;
-    const decision: "exact" | "alternatives" = exactMatch ? "exact" : "alternatives";
+    const decision: "exact" | "alternatives" = textualMatches.length > 0 ? "exact" : "alternatives";
+    const textualSectionMessage =
+      textualMatches.length > 0
+        ? "מצאנו התאמות טקסטואליות במלאי"
+        : "לא מצאנו בדיוק את מה שחיפשת";
+    const alternativesSectionMessage =
+      alternatives.length > 0 ? "הנה משהו שמתאים" : "לא נמצאו כרגע חלופות מתאימות";
 
     return {
       detectedWine,
       exactMatch,
-      alternatives: alternatives.slice(0, input.limit),
+      textualMatches: textualMatchesOutput,
+      alternatives: alternativesOutput,
       metadata: {
         decision,
-        reason: exactMatch ? "strict_exact_match_found" : alternativesSearch.reason,
+        searchStrategy: "text_first_then_vector",
+        reason: textualMatches.length > 0 ? "textual_in_stock_match_found" : alternativesSearch.reason,
+        textualCount: textualMatchesOutput.length,
+        alternativesCount: alternativesOutput.length,
+        vectorAttempted: alternativesSearch.vectorAttempted,
+        vectorUsedAsFallback: alternativesSearch.vectorUsedAsFallback,
+        messages: {
+          textualSection: textualSectionMessage,
+          alternativesSection: alternativesSectionMessage,
+        },
         derivedTags: taggingResult.tags,
         tagSource: taggingResult.source,
         timings: {
@@ -250,42 +269,87 @@ export class WineImageSearchService {
     }
   }
 
-  private async findStrictExactMatch(detectedWine: DetectedWine): Promise<WineProduct | null> {
-    const lookup = [detectedWine.name, detectedWine.producer].filter(Boolean).join(" ").trim();
-    if (!lookup) return null;
+  private async findTextualMatches(
+    detectedWine: DetectedWine,
+    maxMatches = 3
+  ): Promise<WineProduct[]> {
+    const detectedColor = this.getDetectedColor(detectedWine);
+    const primaryQuery = [
+      detectedWine.name,
+      detectedWine.producer,
+      detectedWine.vintage ? String(detectedWine.vintage) : undefined,
+      ...this.colorTerms(detectedColor),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
 
-    const candidates = await this.productCatalogService.searchByName(lookup, 30);
-    if (candidates.length === 0) return null;
+    const queryVariants = Array.from(
+      new Set(
+        [
+          primaryQuery,
+          [detectedWine.name, detectedWine.producer].filter(Boolean).join(" ").trim(),
+          String(detectedWine.name || "").trim(),
+        ].filter((q) => q.length > 0)
+      )
+    );
 
-    const scored = candidates
-      .map((candidate) => {
+    if (queryVariants.length === 0) return [];
+
+    const byId = new Map<string, WineProduct & { textualScore: number }>();
+    for (const lookup of queryVariants) {
+      const candidates = await this.productCatalogService.searchByName(lookup, 40);
+      for (const candidate of candidates) {
+        if (!this.isInStock(candidate as any)) continue;
+        if (
+          detectedColor &&
+          this.hasExplicitColorConflict(candidate as any, detectedColor)
+        ) {
+          continue;
+        }
+
         const nameScore = this.computeNameSimilarity(detectedWine.name, candidate.name || "");
         const producerScore = this.computeProducerScore(detectedWine.producer, candidate);
         const vintageScore = this.computeVintageScore(detectedWine.vintage, candidate);
+        const colorScore = this.computeColorScore(detectedWine, candidate as any);
 
-        const weightedScore = nameScore * 0.75 + producerScore * 0.15 + vintageScore * 0.1;
-        return {
-          candidate,
-          nameScore,
-          producerScore,
-          vintageScore,
-          weightedScore,
-        };
+        const producerRequired = Boolean(detectedWine.producer);
+        const vintageRequired = typeof detectedWine.vintage === "number";
+        const passes =
+          nameScore >= 0.72 &&
+          (!producerRequired || producerScore >= 0.5) &&
+          (!vintageRequired || vintageScore >= 0.6);
+        if (!passes) continue;
+
+        const textualScore =
+          nameScore * 0.72 + producerScore * 0.13 + vintageScore * 0.1 + colorScore * 0.05;
+        const id = String((candidate as any)._id);
+        const current = byId.get(id);
+        if (!current || textualScore > current.textualScore) {
+          byId.set(id, {
+            ...(candidate as any),
+            _id: id,
+            score: textualScore,
+            finalScore: textualScore,
+            textualScore,
+          });
+        }
+      }
+    }
+
+    const ranked = Array.from(byId.values())
+      .sort((a, b) => {
+        const scoreDiff = b.textualScore - a.textualScore;
+        if (scoreDiff !== 0) return scoreDiff;
+        return Number((b as any).stockCount || 0) - Number((a as any).stockCount || 0);
       })
-      .sort((a, b) => b.weightedScore - a.weightedScore);
+      .slice(0, maxMatches)
+      .map((item) => {
+        const { textualScore, ...rest } = item;
+        return rest;
+      }) as WineProduct[];
 
-    const best = scored[0];
-    if (!best) return null;
-
-    const producerRequired = Boolean(detectedWine.producer);
-    const vintageRequired = typeof detectedWine.vintage === "number";
-    const passesStrict =
-      best.nameScore >= 0.86 &&
-      (!producerRequired || best.producerScore >= 0.8) &&
-      (!vintageRequired || best.vintageScore >= 0.9);
-
-    if (!passesStrict) return null;
-    return best.candidate as unknown as WineProduct;
+    return ranked;
   }
 
   private buildSemanticQuery(detectedWine: DetectedWine, queryHint?: string): string {
@@ -343,9 +407,17 @@ export class WineImageSearchService {
     detectedWine: DetectedWine,
     queryHint: string | undefined,
     merchantId: string,
-    limit: number
-  ): Promise<{ products: WineProduct[]; reason: string }> {
+    limit: number,
+    excludedIds: Set<string>,
+    textualCount: number
+  ): Promise<{
+    products: WineProduct[];
+    reason: string;
+    vectorAttempted: boolean;
+    vectorUsedAsFallback: boolean;
+  }> {
     const detectedColor = this.getDetectedColor(detectedWine);
+    let vectorAttempted = false;
     const attempts = [
       ...(detectedColor
         ? [
@@ -370,29 +442,45 @@ export class WineImageSearchService {
     ].filter((a) => a.query.trim().length > 0);
 
     for (const attempt of attempts) {
+      vectorAttempted = true;
       const products = this.applyColorConsistency(
         await this.runSemanticSearch(attempt.query, merchantId, limit),
         detectedWine
-      );
+      ).filter((p) => !excludedIds.has(String(p._id)));
       if (products.length > 0) {
         const colorReasonSuffix = detectedColor
           ? this.hasAnyColorMatch(products, detectedColor)
             ? "_color_aligned"
             : "_color_miss"
           : "";
-        return { products, reason: `${attempt.reason}${colorReasonSuffix}` };
+        return {
+          products,
+          reason: `${attempt.reason}${colorReasonSuffix}`,
+          vectorAttempted,
+          vectorUsedAsFallback: textualCount === 0,
+        };
       }
     }
 
     const catalogFallback = this.applyColorConsistency(
       await this.searchCatalogFallback(detectedWine, limit),
       detectedWine
-    );
+    ).filter((p) => !excludedIds.has(String(p._id)));
     if (catalogFallback.length > 0) {
-      return { products: catalogFallback, reason: "catalog_name_fallback" };
+      return {
+        products: catalogFallback,
+        reason: "catalog_name_fallback",
+        vectorAttempted,
+        vectorUsedAsFallback: false,
+      };
     }
 
-    return { products: [], reason: "no_alternatives_found" };
+    return {
+      products: [],
+      reason: "no_alternatives_found",
+      vectorAttempted,
+      vectorUsedAsFallback: false,
+    };
   }
 
   private async runSemanticSearch(
@@ -464,6 +552,29 @@ export class WineImageSearchService {
 
   private hasAnyColorMatch(products: WineProduct[], detectedColor: "red" | "white" | "rose" | "sparkling"): boolean {
     return products.some((p) => this.matchesDetectedColor(p, detectedColor));
+  }
+
+  private hasExplicitColorConflict(
+    product: WineProduct,
+    detectedColor: "red" | "white" | "rose" | "sparkling"
+  ): boolean {
+    const productColor = this.normalizeWineColor(product.color);
+    return Boolean(productColor && productColor !== detectedColor);
+  }
+
+  private computeColorScore(
+    detectedWine: DetectedWine,
+    candidate: WineProduct
+  ): number {
+    const detectedColor = this.getDetectedColor(detectedWine);
+    if (!detectedColor) return 1;
+    return this.matchesDetectedColor(candidate, detectedColor) ? 1 : 0;
+  }
+
+  private isInStock(product: Partial<WineProduct>): boolean {
+    if (product.inStock === true) return true;
+    const stock = Number(product.stockCount || 0);
+    return Number.isFinite(stock) && stock > 0;
   }
 
   private matchesDetectedColor(
@@ -710,27 +821,6 @@ export class WineImageSearchService {
       .replace(/<[^>]*>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-  }
-
-  private pinProductFirst(products: WineProduct[], exactMatch: WineProduct): WineProduct[] {
-    const exactId = String(exactMatch._id);
-    const deduped = new Map<string, WineProduct>();
-    deduped.set(exactId, {
-      ...exactMatch,
-      score: Number((exactMatch as any).score || 1),
-      finalScore: Number((exactMatch as any).finalScore || 1),
-    } as WineProduct);
-    for (const product of products) {
-      deduped.set(String(product._id), product);
-    }
-    const ordered = Array.from(deduped.values());
-    ordered.sort((a, b) => {
-      const aExact = String(a._id) === exactId ? 1 : 0;
-      const bExact = String(b._id) === exactId ? 1 : 0;
-      if (aExact !== bExact) return bExact - aExact;
-      return Number((b as any).finalScore || b.score || 0) - Number((a as any).finalScore || a.score || 0);
-    });
-    return ordered;
   }
 
   private computeNameSimilarity(left: string, right: string): number {

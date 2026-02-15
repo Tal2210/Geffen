@@ -171,7 +171,10 @@ export function createSearchRoutes(
             decision: result.metadata.decision,
             reason: result.metadata.reason,
             exactMatch: result.exactMatch ? String((result.exactMatch as any)._id) : null,
+            textualCount: result.textualMatches.length,
             alternativesCount: result.alternatives.length,
+            vectorAttempted: result.metadata.vectorAttempted,
+            vectorUsedAsFallback: result.metadata.vectorUsedAsFallback,
             timings: result.metadata.timings,
           },
           "Image search completed"

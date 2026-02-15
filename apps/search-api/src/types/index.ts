@@ -144,10 +144,20 @@ export interface SearchResult {
 export interface ImageSearchResult {
   detectedWine: DetectedWine;
   exactMatch: WineProduct | null;
+  textualMatches: WineProduct[];
   alternatives: WineProduct[];
   metadata: {
     decision: "exact" | "alternatives";
+    searchStrategy: "text_first_then_vector";
     reason: string;
+    textualCount: number;
+    alternativesCount: number;
+    vectorAttempted: boolean;
+    vectorUsedAsFallback: boolean;
+    messages: {
+      textualSection: string;
+      alternativesSection: string;
+    };
     derivedTags: string[];
     tagSource: "llm_catalog_context" | "catalog_fallback";
     timings: {
