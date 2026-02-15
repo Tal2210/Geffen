@@ -315,8 +315,10 @@ export class WineImageSearchService {
 
         const producerRequired = Boolean(detectedWine.producer);
         const vintageRequired = typeof detectedWine.vintage === "number";
+        const strongProducerBridge = producerRequired && producerScore >= 0.9;
+        const minNameScore = strongProducerBridge ? 0.55 : 0.72;
         const passes =
-          nameScore >= 0.72 &&
+          nameScore >= minNameScore &&
           (!producerRequired || producerScore >= 0.5) &&
           (!vintageRequired || vintageScore >= 0.6);
         if (!passes) continue;
@@ -842,7 +844,21 @@ export class WineImageSearchService {
       normalizedLeft.length > 3 &&
       (normalizedRight.includes(normalizedLeft) || normalizedLeft.includes(normalizedRight));
 
-    return Math.max(dice, contains ? 0.92 : 0);
+    const aKeyTokens = this.tokenizeCrossScript(left);
+    const bKeyTokens = this.tokenizeCrossScript(right);
+    const keyDice =
+      aKeyTokens.length > 0 && bKeyTokens.length > 0
+        ? this.computeDiceFromSets(new Set(aKeyTokens), new Set(bKeyTokens))
+        : 0;
+
+    const leftKey = this.toCrossScriptKey(left);
+    const rightKey = this.toCrossScriptKey(right);
+    const keyContains =
+      leftKey.length > 3 &&
+      rightKey.length > 3 &&
+      (rightKey.includes(leftKey) || leftKey.includes(rightKey));
+
+    return Math.max(dice, keyDice * 0.95, contains ? 0.92 : 0, keyContains ? 0.9 : 0);
   }
 
   private computeProducerScore(
@@ -857,7 +873,12 @@ export class WineImageSearchService {
       `${candidate.name || ""} ${candidate.description || ""} ${candidate.country || ""} ${candidate.region || ""}`
     );
     if (!combined) return 0;
-    return combined.includes(normProducer) ? 1 : 0;
+    if (combined.includes(normProducer)) return 1;
+
+    const producerKey = this.toCrossScriptKey(producer);
+    const combinedKey = this.toCrossScriptKey(combined);
+    if (producerKey.length >= 3 && combinedKey.includes(producerKey)) return 1;
+    return 0;
   }
 
   private computeVintageScore(
@@ -876,6 +897,22 @@ export class WineImageSearchService {
       .filter((token) => token.length > 1);
   }
 
+  private tokenizeCrossScript(value: string): string[] {
+    return this.normalizeText(value)
+      .split(/\s+/)
+      .map((token) => this.toCrossScriptKey(token))
+      .filter((token) => token.length > 1);
+  }
+
+  private computeDiceFromSets(left: Set<string>, right: Set<string>): number {
+    if (left.size === 0 || right.size === 0) return 0;
+    let intersection = 0;
+    for (const token of left) {
+      if (right.has(token)) intersection += 1;
+    }
+    return (2 * intersection) / (left.size + right.size);
+  }
+
   private normalizeText(value: string): string {
     return value
       .toLowerCase()
@@ -883,6 +920,49 @@ export class WineImageSearchService {
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private toCrossScriptKey(value: string): string {
+    const normalized = this.normalizeText(value);
+    if (!normalized) return "";
+
+    const hebrewToLatin: Record<string, string> = {
+      א: "",
+      ב: "b",
+      ג: "g",
+      ד: "d",
+      ה: "",
+      ו: "v",
+      ז: "z",
+      ח: "h",
+      ט: "t",
+      י: "y",
+      כ: "k",
+      ך: "k",
+      ל: "l",
+      מ: "m",
+      ם: "m",
+      נ: "n",
+      ן: "n",
+      ס: "s",
+      ע: "",
+      פ: "p",
+      ף: "p",
+      צ: "ts",
+      ץ: "ts",
+      ק: "k",
+      ר: "r",
+      ש: "sh",
+      ת: "t",
+    };
+
+    const mapped = Array.from(normalized)
+      .map((char) => hebrewToLatin[char] ?? char)
+      .join("");
+
+    return mapped
+      .replace(/[aeiou]/g, "")
+      .replace(/[^a-z0-9]/g, "");
   }
 
   private extractJson(raw: string): string | null {

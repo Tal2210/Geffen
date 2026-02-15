@@ -94,13 +94,32 @@ export class ProductCatalogService {
       .limit(Math.min(Math.max(limit, 1), 50))
       .toArray();
 
-    return docs.map((doc: any) => {
+    const normalizedLimit = Math.min(Math.max(limit, 1), 50);
+    const baseResults = docs.map((doc: any) => {
       const normalized = this.normalizeImageFields(doc);
       return {
         ...normalized,
         _id: String(doc._id),
       };
     });
+
+    // Cross-script fallback (e.g. "pelter" <-> "פלטר") when regex-based retrieval misses.
+    const shouldRunCrossScriptFallback = docs.length < normalizedLimit && /[A-Za-z\u0590-\u05FF]/.test(q);
+    if (!shouldRunCrossScriptFallback) {
+      return baseResults.slice(0, normalizedLimit);
+    }
+
+    const fallbackResults = await this.crossScriptFallbackSearch(q, normalizedLimit * 8, normalizedLimit);
+    if (fallbackResults.length === 0) {
+      return baseResults.slice(0, normalizedLimit);
+    }
+
+    const deduped = new Map<string, CatalogProduct & { _id: string }>();
+    for (const product of [...baseResults, ...fallbackResults]) {
+      deduped.set(String(product._id), product);
+      if (deduped.size >= normalizedLimit) break;
+    }
+    return Array.from(deduped.values()).slice(0, normalizedLimit);
   }
 
   private normalizeImageFields(doc: any): any {
@@ -123,5 +142,167 @@ export class ProductCatalogService {
       ...doc,
       imageUrl: doc?.imageUrl || doc?.image_url || firstImage,
     };
+  }
+
+  private async crossScriptFallbackSearch(
+    query: string,
+    candidateLimit: number,
+    resultLimit: number
+  ): Promise<Array<CatalogProduct & { _id: string }>> {
+    const candidates = await this.collection
+      .find({})
+      .project({
+        name: 1,
+        description: 1,
+        price: 1,
+        color: 1,
+        country: 1,
+        region: 1,
+        grapes: 1,
+        vintage: 1,
+        sweetness: 1,
+        category: 1,
+        softCategory: 1,
+        inStock: 1,
+        stockCount: 1,
+        imageUrl: 1,
+        image_url: 1,
+        image: 1,
+        images: 1,
+        featuredImage: 1,
+        featured_image: 1,
+        thumbnail: 1,
+      })
+      .limit(Math.min(Math.max(candidateLimit, 50), 800))
+      .toArray();
+
+    const queryTokens = this.tokenize(query);
+    if (queryTokens.length === 0) return [];
+    const queryKeyTokens = queryTokens.map((token) => this.toCrossScriptKey(token)).filter((token) => token.length >= 3);
+    const queryKeyPhrase = this.toCrossScriptKey(query);
+
+    const scored = candidates
+      .map((doc) => {
+        const haystack = [
+          doc?.name,
+          doc?.description,
+          doc?.country,
+          doc?.region,
+          ...(Array.isArray(doc?.category) ? doc.category : [doc?.category]),
+          ...(Array.isArray(doc?.softCategory) ? doc.softCategory : [doc?.softCategory]),
+          ...(Array.isArray(doc?.grapes) ? doc.grapes : []),
+        ]
+          .filter((v): v is string => typeof v === "string")
+          .join(" ");
+
+        const normalizedHaystack = this.normalizeForSearch(haystack);
+        if (!normalizedHaystack) return null;
+        const keyHaystack = this.toCrossScriptKey(haystack);
+
+        let weightedHits = 0;
+        for (const token of queryTokens) {
+          if (token.length < 2) continue;
+          if (normalizedHaystack.includes(token)) {
+            weightedHits += 1;
+            continue;
+          }
+          const tokenKey = this.toCrossScriptKey(token);
+          if (tokenKey.length >= 3 && keyHaystack.includes(tokenKey)) {
+            weightedHits += 0.85;
+          }
+        }
+
+        if (weightedHits <= 0) return null;
+
+        const directPhraseBonus = normalizedHaystack.includes(this.normalizeForSearch(query)) ? 0.12 : 0;
+        const keyPhraseBonus =
+          queryKeyPhrase.length >= 3 && keyHaystack.includes(queryKeyPhrase) ? 0.18 : 0;
+        const keyTermCoverage =
+          queryKeyTokens.length > 0
+            ? queryKeyTokens.filter((token) => keyHaystack.includes(token)).length / queryKeyTokens.length
+            : 0;
+        const score = Math.min(
+          1,
+          0.22 +
+            (weightedHits / Math.max(1, queryTokens.length)) * 0.58 +
+            keyTermCoverage * 0.1 +
+            directPhraseBonus +
+            keyPhraseBonus
+        );
+        if (score < 0.44) return null;
+
+        return {
+          product: {
+            ...this.normalizeImageFields(doc),
+            _id: String((doc as any)._id),
+          } as CatalogProduct & { _id: string },
+          score,
+        };
+      })
+      .filter((row): row is { product: CatalogProduct & { _id: string }; score: number } => Boolean(row))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, resultLimit)
+      .map((row) => row.product);
+
+    return scored;
+  }
+
+  private tokenize(value: string): string[] {
+    return this.normalizeForSearch(value)
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1);
+  }
+
+  private normalizeForSearch(value: string): string {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[\u0591-\u05C7]/g, "")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private toCrossScriptKey(value: string): string {
+    const normalized = this.normalizeForSearch(value);
+    if (!normalized) return "";
+
+    const hebrewToLatin: Record<string, string> = {
+      א: "",
+      ב: "b",
+      ג: "g",
+      ד: "d",
+      ה: "",
+      ו: "v",
+      ז: "z",
+      ח: "h",
+      ט: "t",
+      י: "y",
+      כ: "k",
+      ך: "k",
+      ל: "l",
+      מ: "m",
+      ם: "m",
+      נ: "n",
+      ן: "n",
+      ס: "s",
+      ע: "",
+      פ: "p",
+      ף: "p",
+      צ: "ts",
+      ץ: "ts",
+      ק: "k",
+      ר: "r",
+      ש: "sh",
+      ת: "t",
+    };
+
+    const mapped = Array.from(normalized)
+      .map((char) => hebrewToLatin[char] ?? char)
+      .join("");
+
+    return mapped
+      .replace(/[aeiou]/g, "")
+      .replace(/[^a-z0-9]/g, "");
   }
 }

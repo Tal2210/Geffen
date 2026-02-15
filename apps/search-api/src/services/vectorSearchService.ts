@@ -193,7 +193,8 @@ export class VectorSearchService {
       .limit(limit)
       .toArray();
 
-    return results.map((doc) => {
+    const normalizedLimit = Math.min(Math.max(limit, 1), 50);
+    const baseResults = results.map((doc) => {
       const normalized = this.normalizeImageFields(doc);
       return {
         ...normalized,
@@ -201,6 +202,36 @@ export class VectorSearchService {
         score: this.computeTextCoverageScore(doc, builtQuery.terms, builtQuery.normalizedQuery),
       };
     }) as VectorSearchHit[];
+
+    const shouldRunCrossScriptFallback =
+      baseResults.length < normalizedLimit && /[A-Za-z\u0590-\u05FF]/.test(query);
+    if (!shouldRunCrossScriptFallback) {
+      return baseResults.slice(0, normalizedLimit);
+    }
+
+    const fallbackResults = await this.crossScriptTextSearchFallback(
+      preFilter,
+      builtQuery.terms,
+      builtQuery.normalizedQuery,
+      normalizedLimit * 8,
+      normalizedLimit
+    );
+    if (fallbackResults.length === 0) {
+      return baseResults.slice(0, normalizedLimit);
+    }
+
+    const merged = new Map<string, VectorSearchHit>();
+    for (const row of [...baseResults, ...fallbackResults]) {
+      const key = String(row._id);
+      const existing = merged.get(key);
+      if (!existing || Number(row.score || 0) > Number(existing.score || 0)) {
+        merged.set(key, row);
+      }
+    }
+
+    return Array.from(merged.values())
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, normalizedLimit);
   }
 
   async fetchProductsByIds(productIds: string[]): Promise<VectorSearchHit[]> {
@@ -653,10 +684,27 @@ export class VectorSearchService {
 
     if (!candidate) return 0.2;
 
-    const hits = terms.filter((term) => candidate.includes(this.normalizeForTextSearch(term))).length;
-    const coverage = hits / terms.length;
+    const candidateKey = this.toCrossScriptKey(candidate);
+    let weightedHits = 0;
+    for (const term of terms) {
+      const normalizedTerm = this.normalizeForTextSearch(term);
+      if (!normalizedTerm) continue;
+      if (candidate.includes(normalizedTerm)) {
+        weightedHits += 1;
+        continue;
+      }
+      const termKey = this.toCrossScriptKey(normalizedTerm);
+      if (termKey.length >= 3 && candidateKey.includes(termKey)) {
+        weightedHits += 0.82;
+      }
+    }
+
+    const coverage = weightedHits / terms.length;
     const phraseBonus = candidate.includes(normalizedQuery) ? 0.15 : 0;
-    return Math.min(1, 0.25 + coverage * 0.7 + phraseBonus);
+    const queryKey = this.toCrossScriptKey(normalizedQuery);
+    const keyPhraseBonus =
+      queryKey.length >= 3 && candidateKey.includes(queryKey) ? 0.12 : 0;
+    return Math.min(1, 0.25 + coverage * 0.62 + phraseBonus + keyPhraseBonus);
   }
 
   private normalizeForTextSearch(value: string): string {
@@ -666,6 +714,116 @@ export class VectorSearchService {
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private async crossScriptTextSearchFallback(
+    preFilter: Record<string, any>,
+    terms: string[],
+    normalizedQuery: string,
+    candidateLimit: number,
+    resultLimit: number
+  ): Promise<VectorSearchHit[]> {
+    if (!terms.length) return [];
+
+    const docs = await this.collection
+      .find(preFilter)
+      .project({
+        _id: 1,
+        merchantId: 1,
+        name: 1,
+        description: 1,
+        short_description: 1,
+        price: 1,
+        currency: 1,
+        color: 1,
+        country: 1,
+        region: 1,
+        grapes: 1,
+        vintage: 1,
+        sweetness: 1,
+        kosher: 1,
+        alcohol: 1,
+        volume: 1,
+        imageUrl: 1,
+        image_url: 1,
+        image: 1,
+        images: 1,
+        featuredImage: 1,
+        featured_image: 1,
+        thumbnail: 1,
+        inStock: 1,
+        stockCount: 1,
+        rating: 1,
+        reviewCount: 1,
+        salesCount30d: 1,
+        viewCount30d: 1,
+        popularity: 1,
+        category: 1,
+        softCategory: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .limit(Math.min(Math.max(candidateLimit, 100), 900))
+      .toArray();
+
+    const scored = docs
+      .map((doc) => {
+        const score = this.computeTextCoverageScore(doc, terms, normalizedQuery);
+        if (score < 0.45) return null;
+        return {
+          ...this.normalizeImageFields(doc),
+          _id: String(doc._id),
+          score,
+        } as VectorSearchHit;
+      })
+      .filter((row): row is VectorSearchHit => Boolean(row))
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, resultLimit);
+
+    return scored;
+  }
+
+  private toCrossScriptKey(value: string): string {
+    const normalized = this.normalizeForTextSearch(value);
+    if (!normalized) return "";
+
+    const hebrewToLatin: Record<string, string> = {
+      א: "",
+      ב: "b",
+      ג: "g",
+      ד: "d",
+      ה: "",
+      ו: "v",
+      ז: "z",
+      ח: "h",
+      ט: "t",
+      י: "y",
+      כ: "k",
+      ך: "k",
+      ל: "l",
+      מ: "m",
+      ם: "m",
+      נ: "n",
+      ן: "n",
+      ס: "s",
+      ע: "",
+      פ: "p",
+      ף: "p",
+      צ: "ts",
+      ץ: "ts",
+      ק: "k",
+      ר: "r",
+      ש: "sh",
+      ת: "t",
+    };
+
+    const mapped = Array.from(normalized)
+      .map((char) => hebrewToLatin[char] ?? char)
+      .join("");
+
+    return mapped
+      .replace(/[aeiou]/g, "")
+      .replace(/[^a-z0-9]/g, "");
   }
 
   /**
