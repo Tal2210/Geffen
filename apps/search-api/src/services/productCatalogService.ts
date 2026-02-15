@@ -50,10 +50,7 @@ export class ProductCatalogService {
 
     const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const terms = q.split(/\s+/).filter(Boolean);
-    
-    // Build a regex that matches ANY term (OR logic)
-    // This is better for natural language queries like "red wine for pasta"
-    const regex = terms.map(t => `(?=.*${escape(t)})`).join('');
+
     const orConditions = terms.map(t => ({
       $or: [
         { name: { $regex: escape(t), $options: "i" } },
@@ -179,6 +176,7 @@ export class ProductCatalogService {
     const queryTokens = this.tokenize(query);
     if (queryTokens.length === 0) return [];
     const queryKeyTokens = queryTokens.map((token) => this.toCrossScriptKey(token)).filter((token) => token.length >= 3);
+    const normalizedQuery = this.normalizeForSearch(query);
     const queryKeyPhrase = this.toCrossScriptKey(query);
 
     const scored = candidates
@@ -198,25 +196,47 @@ export class ProductCatalogService {
         const normalizedHaystack = this.normalizeForSearch(haystack);
         if (!normalizedHaystack) return null;
         const keyHaystack = this.toCrossScriptKey(haystack);
+        const candidateTokens = this.tokenize(haystack);
+        const candidateKeyTokens = candidateTokens
+          .map((token) => this.toCrossScriptKey(token))
+          .filter((token) => token.length >= 3);
 
         let weightedHits = 0;
         for (const token of queryTokens) {
           if (token.length < 2) continue;
-          if (normalizedHaystack.includes(token)) {
-            weightedHits += 1;
-            continue;
+          const normalizedToken = this.normalizeForSearch(token);
+          if (!normalizedToken) continue;
+          let tokenScore = 0;
+          if (candidateTokens.includes(normalizedToken) || normalizedHaystack.includes(normalizedToken)) {
+            tokenScore = 1;
           }
           const tokenKey = this.toCrossScriptKey(token);
-          if (tokenKey.length >= 3 && keyHaystack.includes(tokenKey)) {
-            weightedHits += 0.85;
+          if (tokenScore === 0 && tokenKey.length >= 3 && keyHaystack.includes(tokenKey)) {
+            tokenScore = 0.85;
           }
+          if (tokenScore === 0) {
+            tokenScore = this.computeBestFuzzyTokenMatch(normalizedToken, candidateTokens);
+          }
+          if (tokenScore === 0 && tokenKey.length >= 3) {
+            tokenScore = this.computeBestFuzzyTokenMatch(tokenKey, candidateKeyTokens, true);
+          }
+
+          weightedHits += tokenScore;
         }
 
         if (weightedHits <= 0) return null;
 
-        const directPhraseBonus = normalizedHaystack.includes(this.normalizeForSearch(query)) ? 0.12 : 0;
+        const directPhraseBonus = normalizedQuery && normalizedHaystack.includes(normalizedQuery) ? 0.12 : 0;
         const keyPhraseBonus =
           queryKeyPhrase.length >= 3 && keyHaystack.includes(queryKeyPhrase) ? 0.18 : 0;
+        const fuzzyPhraseBonus =
+          normalizedQuery.length >= 4 &&
+          this.computeBestFuzzyTokenMatch(
+            normalizedQuery.replace(/\s+/g, ""),
+            candidateTokens.map((t) => t.replace(/\s+/g, ""))
+          ) >= 0.7
+            ? 0.08
+            : 0;
         const keyTermCoverage =
           queryKeyTokens.length > 0
             ? queryKeyTokens.filter((token) => keyHaystack.includes(token)).length / queryKeyTokens.length
@@ -227,9 +247,10 @@ export class ProductCatalogService {
             (weightedHits / Math.max(1, queryTokens.length)) * 0.58 +
             keyTermCoverage * 0.1 +
             directPhraseBonus +
-            keyPhraseBonus
+            keyPhraseBonus +
+            fuzzyPhraseBonus
         );
-        if (score < 0.44) return null;
+        if (score < 0.4) return null;
 
         return {
           product: {
@@ -304,5 +325,61 @@ export class ProductCatalogService {
     return mapped
       .replace(/[aeiou]/g, "")
       .replace(/[^a-z0-9]/g, "");
+  }
+
+  private computeBestFuzzyTokenMatch(
+    term: string,
+    candidates: string[],
+    strictLength = false
+  ): number {
+    if (!term || term.length < 4 || candidates.length === 0) return 0;
+
+    let best = 0;
+    for (const rawCandidate of candidates) {
+      const candidate = String(rawCandidate || "").trim();
+      if (!candidate) continue;
+      const maxLen = Math.max(term.length, candidate.length);
+      const lenDiff = Math.abs(term.length - candidate.length);
+      if ((strictLength && lenDiff > 2) || (!strictLength && lenDiff > 3)) continue;
+      if (maxLen <= 1) continue;
+
+      const ratio = this.levenshteinDistance(term, candidate) / maxLen;
+      let score = 0;
+      if (ratio <= 0.12) score = 0.9;
+      else if (ratio <= 0.2) score = 0.78;
+      else if (ratio <= 0.3) score = 0.64;
+      else if (ratio <= 0.36) score = 0.52;
+
+      if (score > best) best = score;
+      if (best >= 0.9) break;
+    }
+
+    return best;
+  }
+
+  private levenshteinDistance(left: string, right: string): number {
+    const a = left;
+    const b = right;
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+
+    const prev = new Uint16Array(b.length + 1);
+    const curr = new Uint16Array(b.length + 1);
+    for (let j = 0; j <= b.length; j += 1) prev[j] = j;
+
+    for (let i = 1; i <= a.length; i += 1) {
+      curr[0] = i;
+      for (let j = 1; j <= b.length; j += 1) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const deleteCost = (prev[j] ?? 0) + 1;
+        const insertCost = (curr[j - 1] ?? 0) + 1;
+        const replaceCost = (prev[j - 1] ?? 0) + cost;
+        curr[j] = Math.min(deleteCost, insertCost, replaceCost);
+      }
+      for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j] ?? 0;
+    }
+
+    return prev[b.length] ?? 0;
   }
 }

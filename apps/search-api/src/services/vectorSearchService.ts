@@ -685,18 +685,30 @@ export class VectorSearchService {
     if (!candidate) return 0.2;
 
     const candidateKey = this.toCrossScriptKey(candidate);
+    const candidateTokens = this.tokenizeForTextSearch(candidate);
+    const candidateKeyTokens = candidateTokens
+      .map((token) => this.toCrossScriptKey(token))
+      .filter((token) => token.length >= 3);
     let weightedHits = 0;
     for (const term of terms) {
       const normalizedTerm = this.normalizeForTextSearch(term);
       if (!normalizedTerm) continue;
-      if (candidate.includes(normalizedTerm)) {
-        weightedHits += 1;
-        continue;
+      let termScore = 0;
+      if (candidateTokens.includes(normalizedTerm) || candidate.includes(normalizedTerm)) {
+        termScore = 1;
       }
       const termKey = this.toCrossScriptKey(normalizedTerm);
-      if (termKey.length >= 3 && candidateKey.includes(termKey)) {
-        weightedHits += 0.82;
+      if (termScore === 0 && termKey.length >= 3 && candidateKey.includes(termKey)) {
+        termScore = 0.82;
       }
+      if (termScore === 0) {
+        termScore = this.computeBestFuzzyTokenMatch(normalizedTerm, candidateTokens);
+      }
+      if (termScore === 0 && termKey.length >= 3) {
+        termScore = this.computeBestFuzzyTokenMatch(termKey, candidateKeyTokens, true);
+      }
+
+      weightedHits += termScore;
     }
 
     const coverage = weightedHits / terms.length;
@@ -704,7 +716,7 @@ export class VectorSearchService {
     const queryKey = this.toCrossScriptKey(normalizedQuery);
     const keyPhraseBonus =
       queryKey.length >= 3 && candidateKey.includes(queryKey) ? 0.12 : 0;
-    return Math.min(1, 0.25 + coverage * 0.62 + phraseBonus + keyPhraseBonus);
+    return Math.min(1, 0.24 + coverage * 0.64 + phraseBonus + keyPhraseBonus);
   }
 
   private normalizeForTextSearch(value: string): string {
@@ -714,6 +726,13 @@ export class VectorSearchService {
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private tokenizeForTextSearch(value: string): string[] {
+    return this.normalizeForTextSearch(value)
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1);
   }
 
   private async crossScriptTextSearchFallback(
@@ -824,6 +843,61 @@ export class VectorSearchService {
     return mapped
       .replace(/[aeiou]/g, "")
       .replace(/[^a-z0-9]/g, "");
+  }
+
+  private computeBestFuzzyTokenMatch(
+    term: string,
+    candidates: string[],
+    strictLength = false
+  ): number {
+    if (!term || term.length < 4 || candidates.length === 0) return 0;
+
+    let best = 0;
+    for (const rawCandidate of candidates) {
+      const candidate = String(rawCandidate || "").trim();
+      if (!candidate) continue;
+      const maxLen = Math.max(term.length, candidate.length);
+      const lenDiff = Math.abs(term.length - candidate.length);
+      if ((strictLength && lenDiff > 2) || (!strictLength && lenDiff > 3)) continue;
+      if (maxLen <= 1) continue;
+
+      const ratio = this.levenshteinDistance(term, candidate) / maxLen;
+      let score = 0;
+      if (ratio <= 0.12) score = 0.88;
+      else if (ratio <= 0.2) score = 0.76;
+      else if (ratio <= 0.3) score = 0.62;
+      else if (ratio <= 0.36) score = 0.5;
+
+      if (score > best) best = score;
+      if (best >= 0.88) break;
+    }
+    return best;
+  }
+
+  private levenshteinDistance(left: string, right: string): number {
+    const a = left;
+    const b = right;
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+
+    const prev = new Uint16Array(b.length + 1);
+    const curr = new Uint16Array(b.length + 1);
+    for (let j = 0; j <= b.length; j += 1) prev[j] = j;
+
+    for (let i = 1; i <= a.length; i += 1) {
+      curr[0] = i;
+      for (let j = 1; j <= b.length; j += 1) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const deleteCost = (prev[j] ?? 0) + 1;
+        const insertCost = (curr[j - 1] ?? 0) + 1;
+        const replaceCost = (prev[j - 1] ?? 0) + cost;
+        curr[j] = Math.min(deleteCost, insertCost, replaceCost);
+      }
+      for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j] ?? 0;
+    }
+
+    return prev[b.length] ?? 0;
   }
 
   /**

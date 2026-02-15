@@ -858,7 +858,17 @@ export class WineImageSearchService {
       rightKey.length > 3 &&
       (rightKey.includes(leftKey) || leftKey.includes(rightKey));
 
-    return Math.max(dice, keyDice * 0.95, contains ? 0.92 : 0, keyContains ? 0.9 : 0);
+    const fuzzyText = this.computeFuzzySimilarity(normalizedLeft, normalizedRight);
+    const fuzzyKey = this.computeFuzzySimilarity(leftKey, rightKey);
+
+    return Math.max(
+      dice,
+      keyDice * 0.95,
+      contains ? 0.92 : 0,
+      keyContains ? 0.9 : 0,
+      fuzzyText * 0.88,
+      fuzzyKey * 0.92
+    );
   }
 
   private computeProducerScore(
@@ -913,6 +923,18 @@ export class WineImageSearchService {
     return (2 * intersection) / (left.size + right.size);
   }
 
+  private computeFuzzySimilarity(left: string, right: string): number {
+    if (!left || !right) return 0;
+    const a = String(left).trim();
+    const b = String(right).trim();
+    if (!a || !b) return 0;
+    const maxLen = Math.max(a.length, b.length);
+    if (maxLen < 4) return 0;
+    const ratio = this.levenshteinDistance(a, b) / maxLen;
+    if (ratio > 0.36) return 0;
+    return Math.max(0, 1 - ratio);
+  }
+
   private normalizeText(value: string): string {
     return value
       .toLowerCase()
@@ -963,6 +985,32 @@ export class WineImageSearchService {
     return mapped
       .replace(/[aeiou]/g, "")
       .replace(/[^a-z0-9]/g, "");
+  }
+
+  private levenshteinDistance(left: string, right: string): number {
+    const a = left;
+    const b = right;
+    if (a === b) return 0;
+    if (!a.length) return b.length;
+    if (!b.length) return a.length;
+
+    const prev = new Uint16Array(b.length + 1);
+    const curr = new Uint16Array(b.length + 1);
+    for (let j = 0; j <= b.length; j += 1) prev[j] = j;
+
+    for (let i = 1; i <= a.length; i += 1) {
+      curr[0] = i;
+      for (let j = 1; j <= b.length; j += 1) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const deleteCost = (prev[j] ?? 0) + 1;
+        const insertCost = (curr[j - 1] ?? 0) + 1;
+        const replaceCost = (prev[j - 1] ?? 0) + cost;
+        curr[j] = Math.min(deleteCost, insertCost, replaceCost);
+      }
+      for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j] ?? 0;
+    }
+
+    return prev[b.length] ?? 0;
   }
 
   private extractJson(raw: string): string | null {
