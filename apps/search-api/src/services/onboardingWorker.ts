@@ -110,6 +110,28 @@ export class OnboardingWorker {
       50,
       assistTemplate || undefined
     );
+    if (assistTemplate?.sampleProductUrl) {
+      const sample = await this.scraper
+        .extractSingleProductByTemplate(discovery, assistTemplate.sampleProductUrl, assistTemplate)
+        .catch(() => null);
+      if (sample?.sampleProduct?.name) {
+        const sampleSeed = {
+          name: sample.sampleProduct.name,
+          description: sample.sampleProduct.description,
+          price: Number(sample.sampleProduct.price || 0) || undefined,
+          currency: sample.sampleProduct.currency,
+          imageUrl: sample.sampleProduct.imageUrl,
+          productUrl: assistTemplate.sampleProductUrl,
+          inStock: sample.sampleProduct.inStock,
+          source: "generic_static" as const,
+          raw: {
+            attributes: sample.sampleProduct.attributes || {},
+            isGuideSeed: true,
+          },
+        };
+        scraped.products.unshift(sampleSeed);
+      }
+    }
     await this.onboardingService.updateJobCounters(job.jobId, {
       extracted: scraped.products.length,
     });

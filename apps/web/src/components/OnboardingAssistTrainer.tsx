@@ -110,7 +110,7 @@ export function OnboardingAssistTrainer({
     const onMessage = (event: MessageEvent) => {
       const payload = event.data as any;
       if (!payload || payload.type !== "assist-click") return;
-      const selector = String(payload.simpleSelector || payload.fullSelector || "").trim();
+      const selector = String(payload.fullSelector || payload.simpleSelector || "").trim();
       if (!selector) return;
 
       const sampleText = String(payload.text || payload.src || payload.href || "").trim();

@@ -711,7 +711,18 @@ export class ScraperOrchestratorService {
       }
     };
 
-    tryAdd(sampleProductUrl);
+    const sampleAbs = this.toAbsoluteUrl(sampleProductUrl || "", origin);
+    if (sampleAbs) {
+      try {
+        const parsed = new URL(sampleAbs);
+        if (parsed.origin === origin) {
+          // Always keep the user-confirmed sample page, even if URL pattern is unusual.
+          urls.add(parsed.toString());
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     const sitemap = await this.fetchText(`${origin.replace(/\/$/, "")}/sitemap.xml`).catch(() => "");
     if (sitemap) {
