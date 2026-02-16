@@ -331,7 +331,7 @@ export class OnboardingService {
 
     const previewProducts = await this.products
       .find({ demoId: demo.demoId })
-      .sort({ inStock: -1, price: 1 })
+      .sort({ inStock: -1, createdAt: -1 })
       .limit(12)
       .toArray();
 

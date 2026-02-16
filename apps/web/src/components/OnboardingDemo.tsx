@@ -52,6 +52,9 @@ interface DemoSearchResponse {
 }
 
 function formatIls(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "Price unavailable";
+  }
   return new Intl.NumberFormat("he-IL", {
     style: "currency",
     currency: "ILS",

@@ -25,6 +25,8 @@ export class ScraperOrchestratorService {
   private readonly shopifyAdapter = new ShopifyAdapter();
   private readonly wooAdapter = new WooCommerceAdapter();
   private readonly fetchTimeoutMs = 15_000;
+  private readonly browserLikeUserAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
 
   async discover(websiteUrl: string): Promise<ScraperDiscovery> {
     const normalized = this.normalizeWebsiteUrl(websiteUrl);
@@ -166,9 +168,12 @@ export class ScraperOrchestratorService {
     const urls = [
       discovery.normalizedUrl,
       `${discovery.origin}/collections/all`,
+      `${discovery.origin}/collections`,
       `${discovery.origin}/shop`,
       `${discovery.origin}/products`,
+      `${discovery.origin}/products?page=1`,
       `${discovery.origin}/catalog`,
+      `${discovery.origin}/collections/all?view=all`,
     ];
 
     const dedupedUrls = Array.from(new Set(urls));
@@ -217,12 +222,14 @@ export class ScraperOrchestratorService {
               : String(image || "");
 
           const offer = Array.isArray(node?.offers) ? node.offers[0] : node?.offers;
-          const productUrl = String(node?.url || node?.["@id"] || "").trim();
-          const price = Number(
-            offer?.price ||
-              offer?.priceSpecification?.price ||
-              node?.price ||
-              NaN
+          const productUrl = String(node?.url || node?.["@id"] || offer?.url || "").trim();
+          const price = this.parsePriceLoose(
+            String(
+              offer?.price ||
+                offer?.priceSpecification?.price ||
+                node?.price ||
+                ""
+            )
           );
 
           products.push({
@@ -271,16 +278,21 @@ export class ScraperOrchestratorService {
       if (!/product|shop|item|sku|store|\/p\//i.test(href)) continue;
 
       const titleMatch = body.match(/(?:<h[1-6][^>]*>|<span[^>]*class=["'][^"']*(?:title|name)[^"']*["'][^>]*>)([\s\S]*?)(?:<\/h[1-6]>|<\/span>)/i);
-      const title = this.stripHtml(titleMatch?.[1] || "").trim();
-      const priceMatch = body.match(/(?:₪|\$|€|£)\s?([0-9]+(?:[.,][0-9]{1,2})?)/);
-      const price = Number(String(priceMatch?.[1] || "").replace(/,/g, ""));
+      const title =
+        this.stripHtml(titleMatch?.[1] || "").trim() ||
+        this.stripHtml(body).slice(0, 180).trim();
+      const price =
+        this.parsePriceLoose(this.stripHtml(body)) ??
+        this.parsePriceLoose(
+          body.match(/(?:data-price|price|amount|content)=["']([^"']+)["']/i)?.[1] || ""
+        );
       const imageMatch = body.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
 
-      if (!title || !Number.isFinite(price)) continue;
+      if (!title) continue;
 
       cards.push({
         name: title,
-        price,
+        price: Number.isFinite(Number(price)) ? Number(price) : undefined,
         currency: this.detectCurrencyFromHtml(body),
         imageUrl: this.toAbsoluteUrl(imageMatch?.[1] || "", origin),
         productUrl: this.toAbsoluteUrl(href, origin),
@@ -305,7 +317,7 @@ export class ScraperOrchestratorService {
     const browser = await playwright.chromium.launch({ headless: true });
     try {
       const page = await browser.newPage({
-        userAgent: "Geffen-Onboarding-Bot/1.0",
+        userAgent: this.browserLikeUserAgent,
       });
       await page.goto(targetUrl, { waitUntil: "networkidle", timeout: this.fetchTimeoutMs });
       await page.waitForTimeout(1200);
@@ -361,13 +373,12 @@ export class ScraperOrchestratorService {
         const title = this.stripHtml(String((row as any)?.title || "")).trim();
         const href = String((row as any)?.href || "").trim();
         const priceText = String((row as any)?.priceText || "");
-        const priceMatch = priceText.match(/(?:₪|\$|€|£)\s?([0-9]+(?:[.,][0-9]{1,2})?)/);
-        const price = Number(String(priceMatch?.[1] || "").replace(/,/g, ""));
-        if (!title || !href || !Number.isFinite(price)) continue;
+        const price = this.parsePriceLoose(priceText);
+        if (!title || !href) continue;
 
         out.push({
           name: title,
-          price,
+          price: Number.isFinite(Number(price)) ? Number(price) : undefined,
           currency: this.detectCurrencyFromHtml(priceText),
           imageUrl: String((row as any)?.imageUrl || "") || undefined,
           productUrl: href,
@@ -414,6 +425,45 @@ export class ScraperOrchestratorService {
       .trim();
   }
 
+  private parsePriceLoose(value: string): number | undefined {
+    const raw = String(value || "").trim();
+    if (!raw) return undefined;
+
+    const normalized = raw
+      .replace(/&nbsp;|&#160;|\u00a0/gi, " ")
+      .replace(/[^\d.,\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return undefined;
+
+    const match = normalized.match(/\d{1,3}(?:[.,\s]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?/);
+    if (!match?.[0]) return undefined;
+    const token = match[0].trim();
+
+    const hasDot = token.includes(".");
+    const hasComma = token.includes(",");
+    let canonical = token;
+    if (hasDot && hasComma) {
+      if (token.lastIndexOf(".") > token.lastIndexOf(",")) {
+        canonical = token.replace(/,/g, "");
+      } else {
+        canonical = token.replace(/\./g, "").replace(",", ".");
+      }
+    } else if (hasComma) {
+      const commaParts = token.split(",");
+      canonical =
+        commaParts.length === 2 && (commaParts[1]?.length || 0) <= 2
+          ? token.replace(",", ".")
+          : token.replace(/,/g, "");
+    } else {
+      canonical = token.replace(/\s/g, "");
+    }
+
+    const num = Number(canonical);
+    if (!Number.isFinite(num) || num <= 0) return undefined;
+    return num;
+  }
+
   private toAbsoluteUrl(value: string, origin: string): string | undefined {
     const raw = String(value || "").trim();
     if (!raw) return undefined;
@@ -431,7 +481,7 @@ export class ScraperOrchestratorService {
       const response = await fetch(url, {
         signal: controller.signal,
         headers: {
-          "User-Agent": "Geffen-Onboarding-Bot/1.0",
+          "User-Agent": this.browserLikeUserAgent,
           Accept: "text/html,application/json,text/plain,*/*",
         },
       });

@@ -62,11 +62,12 @@ export class CatalogNormalizerService {
     const name = this.cleanText(product.name);
     if (!name) return null;
 
-    const url = this.toAbsoluteUrl(product.productUrl, baseUrl);
-    if (!url) return null;
+    const url =
+      this.toAbsoluteUrl(product.productUrl, baseUrl) ||
+      this.buildSyntheticProductUrl(baseUrl, name, product.brand);
 
     const price = Number(product.price);
-    if (!Number.isFinite(price) || price <= 0) return null;
+    const normalizedPrice = Number.isFinite(price) && price > 0 ? price : 0;
 
     const description = this.cleanText(product.description, 1800);
     const imageUrl = this.toAbsoluteUrl(product.imageUrl, baseUrl);
@@ -74,7 +75,7 @@ export class CatalogNormalizerService {
     return {
       name,
       description: description || undefined,
-      price,
+      price: normalizedPrice,
       currency: this.cleanText(product.currency, 12) || undefined,
       imageUrl: imageUrl || undefined,
       productUrl: url,
@@ -164,5 +165,14 @@ export class CatalogNormalizerService {
       .replace(/[?#].*$/, "")
       .replace(/[^\p{L}\p{N}\s/.-]/gu, "")
       .trim();
+  }
+
+  private buildSyntheticProductUrl(baseUrl: string, name: string, brand?: string): string {
+    const slug = this.normalizeKey(`${name} ${brand || ""}`)
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .slice(0, 96);
+    const safeSlug = slug || `product-${Date.now()}`;
+    return `${baseUrl.replace(/\/$/, "")}/onboarding-product/${safeSlug}`;
   }
 }
