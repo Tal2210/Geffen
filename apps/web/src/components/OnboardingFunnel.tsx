@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { OnboardingAssistTrainer } from "./OnboardingAssistTrainer";
+import {
+  OnboardingAssistTrainer,
+  type GuideTemplatePayload,
+} from "./OnboardingAssistTrainer";
+import { resolveProductImageUrl } from "../utils/productImage";
 
 interface CategoryOption {
   value: string;
@@ -61,7 +65,59 @@ interface JobStatusResponse {
   expiresAt: string;
 }
 
-type WizardStep = "details" | "guide" | "progress";
+interface LiveProduct {
+  _id: string;
+  name: string;
+  description?: string;
+  imageUrl?: string;
+  price: number;
+  currency?: string;
+  productUrl?: string;
+}
+
+interface JobLiveResponse {
+  jobId: string;
+  status: JobStatusResponse["status"];
+  progress: JobProgress;
+  counters: {
+    extracted: number;
+    normalized: number;
+    embedded: number;
+    indexed: number;
+  };
+  recentProducts: LiveProduct[];
+}
+
+interface SampleResult {
+  sampleProduct: {
+    name?: string;
+    price?: number;
+    currency?: string;
+    imageUrl?: string;
+    description?: string;
+    inStock?: boolean;
+    attributes: Record<string, string>;
+  };
+  missingFields: string[];
+}
+
+type WizardStep = "details" | "guide" | "preview-confirm" | "indexing-live";
+
+function formatIls(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "Price unavailable";
+  return new Intl.NumberFormat("he-IL", {
+    style: "currency",
+    currency: "ILS",
+    maximumFractionDigits: Number.isInteger(value) ? 0 : 2,
+  }).format(value);
+}
+
+function toPlainText(value?: string): string {
+  if (!value) return "";
+  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+const STEP_ORDER = ["discover", "extract", "normalize", "sample", "embed", "index", "finalize", "done"];
 
 export function OnboardingFunnel() {
   const navigate = useNavigate();
@@ -70,11 +126,17 @@ export function OnboardingFunnel() {
   const [category, setCategory] = useState("wine");
   const [categories, setCategories] = useState<CategoryOption[]>(FALLBACK_CATEGORIES);
   const [step, setStep] = useState<WizardStep>("details");
-  const [guidanceSaved, setGuidanceSaved] = useState(false);
-  const [guideProductUrl, setGuideProductUrl] = useState("");
+  const [sampleCheck, setSampleCheck] = useState<{
+    templatePayload: GuideTemplatePayload;
+    sampleResult: SampleResult;
+    capturedCount: number;
+    requiredCount: number;
+  } | null>(null);
   const [starting, setStarting] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [loadingCategories, setLoadingCategories] = useState(true);
   const [job, setJob] = useState<JobStatusResponse | null>(null);
+  const [live, setLive] = useState<JobLiveResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const pollRef = useRef<number | null>(null);
@@ -109,7 +171,7 @@ export function OnboardingFunnel() {
   }, [API_URL]);
 
   useEffect(() => {
-    if (!job || !["queued", "running"].includes(job.status)) {
+    if (step !== "indexing-live" || !job || !["queued", "running"].includes(job.status)) {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
@@ -120,7 +182,8 @@ export function OnboardingFunnel() {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = window.setInterval(() => {
       void pollJob(job.jobId);
-    }, 2000);
+      void pollLive(job.jobId);
+    }, 1500);
 
     return () => {
       if (pollRef.current) {
@@ -128,16 +191,46 @@ export function OnboardingFunnel() {
         pollRef.current = null;
       }
     };
-  }, [job]);
+  }, [job, step]);
 
   const progressPercent = useMemo(() => {
-    return Math.max(0, Math.min(100, Number(job?.progress?.percent || 0)));
-  }, [job]);
+    return Math.max(0, Math.min(100, Number(job?.progress?.percent || live?.progress?.percent || 0)));
+  }, [job, live]);
 
-  const start = async () => {
+  const detailsValid = useMemo(() => {
+    const normalizedWebsite = normalizeHttpUrl(websiteUrl);
+    return (
+      Boolean(category) &&
+      isValidEmail(email) &&
+      isPublicWebsiteUrl(normalizedWebsite)
+    );
+  }, [category, email, websiteUrl]);
+
+  const goToGuide = () => {
+    const normalizedWebsite = normalizeHttpUrl(websiteUrl);
+    if (!isPublicWebsiteUrl(normalizedWebsite)) {
+      setError("יש להזין URL ציבורי תקין (http/https).");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setError("יש להזין אימייל תקין.");
+      return;
+    }
+    if (!category) {
+      setError("יש לבחור קטגוריה.");
+      return;
+    }
+    setError(null);
+    setWebsiteUrl(normalizedWebsite);
+    setEmail(String(email || "").trim());
+    setSampleCheck(null);
+    setStep("guide");
+  };
+
+  const startJob = async () => {
     setError(null);
     setStarting(true);
-    setStep("progress");
+    setStep("indexing-live");
 
     try {
       const response = await fetch(`${API_URL}/onboarding/start`, {
@@ -154,12 +247,37 @@ export function OnboardingFunnel() {
       }
 
       const started = payload as StartResponse;
-      await pollJob(started.jobId);
+      await Promise.all([pollJob(started.jobId), pollLive(started.jobId)]);
     } catch (err) {
-      setStep("guide");
+      setStep("preview-confirm");
       setError(err instanceof Error ? err.message : "Failed to start onboarding");
     } finally {
       setStarting(false);
+    }
+  };
+
+  const confirmAndStart = async () => {
+    if (!sampleCheck) return;
+    setSavingTemplate(true);
+    setError(null);
+    try {
+      const saveResponse = await fetch(`${API_URL}/onboarding/assist/template`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(sampleCheck.templatePayload),
+      });
+      const savePayload = await saveResponse.json().catch(() => ({}));
+      if (!saveResponse.ok) {
+        throw new Error(savePayload?.message || savePayload?.error || `Error ${saveResponse.status}`);
+      }
+
+      await startJob();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "שמירת הגדרות הסקרייפר נכשלה");
+    } finally {
+      setSavingTemplate(false);
     }
   };
 
@@ -185,33 +303,31 @@ export function OnboardingFunnel() {
     }
   };
 
-  const goToGuide = () => {
-    if (!websiteUrl.trim() || !email.trim()) {
-      setError("Please fill website URL and email first.");
-      return;
-    }
-    setError(null);
-    setStep("guide");
-    if (!guideProductUrl.trim()) {
-      setGuideProductUrl(websiteUrl.trim());
-    }
+  const pollLive = async (jobId: string) => {
+    const response = await fetch(`${API_URL}/onboarding/jobs/${encodeURIComponent(jobId)}/live`);
+    const payload = await response.json();
+    if (!response.ok) return;
+    setLive(payload as JobLiveResponse);
   };
+
+  const currentTimelineStep = (live?.progress?.step || job?.progress?.step || "queued").toLowerCase();
 
   return (
     <div className="min-h-screen bg-[#fffdfd] px-6 py-8 text-slate-900 lg:px-10">
-      <div className="mx-auto max-w-5xl rounded-3xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
-        <h1 className="mb-2 text-2xl font-semibold text-slate-900">Build Your Semantic Demo</h1>
+      <div className="mx-auto max-w-6xl rounded-3xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
+        <h1 className="mb-2 text-2xl font-semibold text-slate-900">צור דמו סמנטי לחנות שלך</h1>
         <p className="mb-6 text-sm text-slate-500">
-          Quick onboarding in 3 steps: add details, guide the scraper on one product page, then run scraping + indexing.
+          אונבורדינג אינטראקטיבי: פרטי חנות → הדרכת סקרייפר → אישור דוגמת מוצר → טעינה חיה של אינדוקס.
         </p>
 
-        <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-3">
-          <StepBadge active={step === "details"} done={step !== "details"} label="1. Store Details" />
-          <StepBadge active={step === "guide"} done={step === "progress"} label="2. Guided Scraper" />
+        <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-4">
+          <StepBadge active={step === "details"} done={step !== "details"} label="1. פרטי חנות" />
+          <StepBadge active={step === "guide"} done={["preview-confirm", "indexing-live"].includes(step)} label="2. הדרכת סקרייפר" />
+          <StepBadge active={step === "preview-confirm"} done={step === "indexing-live"} label="3. אישור דוגמה" />
           <StepBadge
-            active={step === "progress"}
+            active={step === "indexing-live"}
             done={Boolean(job && ["ready", "partial_ready"].includes(job.status))}
-            label="3. Scrape + Index"
+            label="4. טעינה ואינדוקס"
           />
         </div>
 
@@ -225,7 +341,7 @@ export function OnboardingFunnel() {
           <div className="space-y-4">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                Website URL
+                אתר החנות
               </span>
               <input
                 value={websiteUrl}
@@ -233,11 +349,12 @@ export function OnboardingFunnel() {
                 placeholder="https://your-store.com"
                 className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
               />
+              <p className="mt-1 text-xs text-slate-500">הכנס כתובת אתר ציבורי של החנות (לא עמוד אדמין).</p>
             </label>
 
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                Email
+                אימייל
               </span>
               <input
                 value={email}
@@ -249,7 +366,7 @@ export function OnboardingFunnel() {
 
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                Store Category
+                קטגוריית החנות
               </span>
               <select
                 value={category}
@@ -268,34 +385,23 @@ export function OnboardingFunnel() {
             <button
               type="button"
               onClick={goToGuide}
-              disabled={!websiteUrl.trim() || !email.trim()}
+              disabled={!detailsValid}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-6 text-sm font-semibold text-white transition hover:bg-geffen-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Continue To Guided Scraper
+              המשך להדרכת סקרייפר
             </button>
           </div>
         )}
 
         {step === "guide" && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-geffen-100 bg-gradient-to-r from-geffen-50 to-white p-4">
-              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Before We Scrape</p>
-              <p className="mt-1 text-sm text-slate-700">
-                Open one real product page from your store, then teach us where the important elements are. This improves extraction quality dramatically.
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
-                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Domain: {websiteUrl || "-"}</span>
-                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Category: {category}</span>
-                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Email: {email}</span>
-              </div>
-            </div>
-
             <OnboardingAssistTrainer
               apiUrl={API_URL}
               websiteUrl={websiteUrl}
-              initialProductUrl={guideProductUrl}
-              onTemplateSaved={() => {
-                setGuidanceSaved(true);
+              category={category}
+              onSampleReady={(data) => {
+                setSampleCheck(data);
+                setStep("preview-confirm");
               }}
             />
 
@@ -305,32 +411,98 @@ export function OnboardingFunnel() {
                 onClick={() => setStep("details")}
                 className="h-11 rounded-xl border border-geffen-200 bg-white px-5 text-sm font-semibold text-geffen-700 hover:border-geffen-400"
               >
-                Back
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  void start();
-                }}
-                disabled={starting}
-                className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
-              >
-                {starting
-                  ? "Starting..."
-                  : guidanceSaved
-                    ? "Start Scraping + Indexing (With Guidance)"
-                    : "Skip Guidance And Start Scraping"}
+                חזור לפרטים
               </button>
             </div>
           </div>
         )}
 
-        {step === "progress" && (
+        {step === "preview-confirm" && sampleCheck && (
           <div className="space-y-4">
+            <div className="rounded-xl border border-geffen-100 bg-geffen-50/60 p-4">
+              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">דוגמת מוצר לפני אינדוקס</p>
+              <p className="mt-1 text-sm text-slate-600">
+                זה המוצר שחולץ לפי הבחירות שלך. אם הכול נראה תקין, נתחיל scraping + indexing מלא.
+              </p>
+            </div>
+
+            <article className="overflow-hidden rounded-2xl border border-geffen-100 bg-white shadow-sm">
+              <div className="grid gap-0 md:grid-cols-[320px,1fr]">
+                <div className="flex h-64 items-center justify-center border-b border-geffen-100 bg-gradient-to-b from-geffen-50 to-white md:border-b-0 md:border-r">
+                  {sampleCheck.sampleResult.sampleProduct.imageUrl ? (
+                    <img
+                      src={resolveProductImageUrl({ imageUrl: sampleCheck.sampleResult.sampleProduct.imageUrl } as any)}
+                      alt={sampleCheck.sampleResult.sampleProduct.name || "Sample product"}
+                      className="h-full w-full object-contain p-2"
+                    />
+                  ) : (
+                    <span className="text-xs uppercase tracking-[0.14em] text-geffen-500">No image</span>
+                  )}
+                </div>
+
+                <div className="p-5">
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    {sampleCheck.sampleResult.sampleProduct.name || "No product name"}
+                  </h3>
+                  <p className="mt-2 text-2xl font-semibold text-geffen-700">
+                    {formatIls(Number(sampleCheck.sampleResult.sampleProduct.price || 0))}
+                  </p>
+                  <p className="mt-3 text-sm text-slate-600">
+                    {toPlainText(sampleCheck.sampleResult.sampleProduct.description) || "No description extracted"}
+                  </p>
+
+                  {Object.keys(sampleCheck.sampleResult.sampleProduct.attributes || {}).length > 0 && (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {Object.entries(sampleCheck.sampleResult.sampleProduct.attributes)
+                        .filter(([, value]) => String(value || "").trim().length > 0)
+                        .map(([key, value]) => (
+                          <span
+                            key={key}
+                            className="rounded-full border border-geffen-200 bg-geffen-50 px-3 py-1 text-xs text-geffen-800"
+                          >
+                            {key}: {value}
+                          </span>
+                        ))}
+                    </div>
+                  )}
+
+                  {sampleCheck.sampleResult.missingFields.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      חסרים שדות: {sampleCheck.sampleResult.missingFields.join(", ")}.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </article>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setStep("guide")}
+                className="h-11 rounded-xl border border-geffen-200 bg-white px-5 text-sm font-semibold text-geffen-700 hover:border-geffen-400"
+              >
+                חזור לעריכה
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void confirmAndStart();
+                }}
+                disabled={starting || savingTemplate || sampleCheck.sampleResult.missingFields.length > 0}
+                className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+              >
+                {starting || savingTemplate ? "מתחיל..." : "נראה טוב, תתחיל אינדוקס"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "indexing-live" && (
+          <div className="space-y-5">
             <div className="rounded-xl border border-geffen-100 bg-geffen-50/50 p-4">
-              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Status</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{job?.status || "queued"}</p>
-              <p className="mt-1 text-sm text-slate-600">{job?.progress?.message || "Working..."}</p>
+              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">סטטוס נוכחי</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{job?.status || live?.status || "queued"}</p>
+              <p className="mt-1 text-sm text-slate-600">{job?.progress?.message || live?.progress?.message || "עובדים..."}</p>
             </div>
 
             <div>
@@ -345,6 +517,72 @@ export function OnboardingFunnel() {
                 />
               </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <LiveMetric label="נסרקו" value={live?.counters?.extracted || 0} />
+              <LiveMetric label="נורמלו" value={live?.counters?.normalized || 0} />
+              <LiveMetric label="אמבדינג" value={live?.counters?.embedded || 0} />
+              <LiveMetric label="אונדקסו" value={live?.counters?.indexed || 0} />
+            </div>
+
+            <section className="rounded-2xl border border-geffen-100 bg-white p-4">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">Pipeline</p>
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {STEP_ORDER.map((item) => {
+                  const isDone = STEP_ORDER.indexOf(item) <= STEP_ORDER.indexOf(currentTimelineStep as any);
+                  const isActive = item === currentTimelineStep;
+                  return (
+                    <div
+                      key={item}
+                      className={`rounded-lg border px-3 py-2 text-xs ${
+                        isActive
+                          ? "border-geffen-500 bg-geffen-50 text-geffen-800"
+                          : isDone
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-geffen-100 bg-white text-slate-500"
+                      }`}
+                    >
+                      {item}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-geffen-100 bg-white p-4">
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                מוצרים מתווספים עכשיו
+              </p>
+
+              {(live?.recentProducts || []).length === 0 ? (
+                <div className="rounded-xl border border-geffen-100 bg-geffen-50/40 p-6 text-center text-sm text-slate-500">
+                  מחכים למוצרים ראשונים...
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {(live?.recentProducts || []).map((product, index) => (
+                    <article
+                      key={`${product._id}-${index}`}
+                      className="rounded-xl border border-geffen-100 bg-white p-3 shadow-sm transition-all duration-500 hover:border-geffen-300"
+                    >
+                      <div className="mb-2 flex h-28 items-center justify-center rounded-lg border border-geffen-100 bg-geffen-50/50">
+                        {resolveProductImageUrl(product as any) ? (
+                          <img
+                            src={resolveProductImageUrl(product as any)}
+                            alt={product.name}
+                            className="h-full w-full object-contain p-1"
+                          />
+                        ) : (
+                          <span className="text-[10px] uppercase tracking-[0.12em] text-geffen-500">No image</span>
+                        )}
+                      </div>
+                      <p className="line-clamp-2 text-xs font-semibold text-slate-800">{product.name}</p>
+                      <p className="mt-1 text-sm font-semibold text-geffen-700">{formatIls(product.price)}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
 
             {((job && job.status === "failed") || job?.errorMessage) && (
               <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
@@ -372,4 +610,47 @@ function StepBadge({ label, active, done }: { label: string; active: boolean; do
       {label}
     </div>
   );
+}
+
+function LiveMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-geffen-100 bg-white p-3">
+      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="mt-1 text-xl font-semibold text-geffen-700">{value}</p>
+    </div>
+  );
+}
+
+function normalizeHttpUrl(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return raw;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function isValidEmail(value: string): boolean {
+  const email = String(value || "").trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function isPublicWebsiteUrl(value: string): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    const host = url.hostname.toLowerCase();
+    if (!host) return false;
+    if (host === "localhost" || host.endsWith(".local")) return false;
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      if (host.startsWith("10.") || host.startsWith("127.") || host.startsWith("192.168.")) {
+        return false;
+      }
+      const parts = host.split(".").map((n) => Number(n));
+      const a = Number(parts[0] ?? -1);
+      const b = Number(parts[1] ?? -1);
+      if (a === 172 && b >= 16 && b <= 31) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

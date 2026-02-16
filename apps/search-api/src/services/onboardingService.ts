@@ -2,49 +2,28 @@ import crypto from "node:crypto";
 import { MongoClient, type Collection, type Db, type WithId } from "mongodb";
 import type {
   Env,
+  OnboardingAssistCustomField,
+  OnboardingAssistExtractSampleResult,
+  OnboardingAssistSelector,
+  OnboardingAssistTemplatePayload,
+  OnboardingAssistRuntimeTemplate,
   OnboardingCategory,
   OnboardingDemoResponse,
   OnboardingDemoSearchResult,
   OnboardingIndexedProduct,
+  OnboardingJobCounters,
+  OnboardingJobLiveResponse,
   OnboardingJobProgress,
   OnboardingJobStatus,
   OnboardingJobStatusResponse,
   OnboardingNormalizedProduct,
+  OnboardingSampleProduct,
   OnboardingStartRequest,
   OnboardingStartResponse,
   OnboardingTrackEvent,
 } from "../types/index.js";
 import { OnboardingSearchService } from "./onboardingSearchService.js";
-
-export interface OnboardingAssistSelector {
-  selector: string;
-  mode: "text" | "src";
-}
-
-export interface OnboardingAssistTemplate {
-  websiteUrl: string;
-  productUrl: string;
-  selectors: {
-    name: OnboardingAssistSelector;
-    price?: OnboardingAssistSelector;
-    image?: OnboardingAssistSelector;
-    description?: OnboardingAssistSelector;
-    inStock?: OnboardingAssistSelector;
-  };
-}
-
-export interface OnboardingAssistRuntimeTemplate {
-  domain: string;
-  websiteUrl: string;
-  sampleProductUrl: string;
-  selectors: {
-    name: OnboardingAssistSelector;
-    price?: OnboardingAssistSelector;
-    image?: OnboardingAssistSelector;
-    description?: OnboardingAssistSelector;
-    inStock?: OnboardingAssistSelector;
-  };
-}
+import { ScraperOrchestratorService } from "./scraperOrchestratorService.js";
 
 interface OnboardingJobDoc {
   jobId: string;
@@ -66,6 +45,7 @@ interface OnboardingJobDoc {
   productCount?: number;
   startedAt?: string;
   finishedAt?: string;
+  counts?: OnboardingJobCounters;
 }
 
 interface OnboardingDemoDoc {
@@ -84,6 +64,7 @@ interface OnboardingDemoDoc {
 
 interface OnboardingProductDoc extends Omit<OnboardingIndexedProduct, "_id"> {
   _id?: any;
+  attributesText?: string;
 }
 
 interface OnboardingTrackDoc {
@@ -103,6 +84,7 @@ interface OnboardingAssistTemplateDoc {
   domain: string;
   websiteUrl: string;
   sampleProductUrl: string;
+  category?: OnboardingCategory;
   selectors: {
     name: OnboardingAssistSelector;
     price?: OnboardingAssistSelector;
@@ -110,7 +92,15 @@ interface OnboardingAssistTemplateDoc {
     description?: OnboardingAssistSelector;
     inStock?: OnboardingAssistSelector;
   };
+  customFields?: OnboardingAssistCustomField[];
   createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
+interface OnboardingJobPreviewDoc {
+  jobId: string;
+  products: OnboardingIndexedProduct[];
   updatedAt: string;
   expiresAt: string;
 }
@@ -123,7 +113,9 @@ export class OnboardingService {
   private products!: Collection<OnboardingProductDoc>;
   private track!: Collection<OnboardingTrackDoc>;
   private templates!: Collection<OnboardingAssistTemplateDoc>;
+  private jobPreviews!: Collection<OnboardingJobPreviewDoc>;
   private searchService: OnboardingSearchService;
+  private scraperService: ScraperOrchestratorService;
 
   private readonly tokenSecret: string;
   private readonly demoTtlDays: number;
@@ -137,6 +129,7 @@ export class OnboardingService {
   constructor(private env: Env) {
     this.client = new MongoClient(env.MONGO_URI);
     this.searchService = new OnboardingSearchService(env);
+    this.scraperService = new ScraperOrchestratorService();
     this.demoTtlDays = env.ONBOARDING_DEMO_TTL_DAYS || 14;
     this.tokenSecret = env.ONBOARDING_TOKEN_SECRET || "dev-onboarding-token-secret";
   }
@@ -151,6 +144,7 @@ export class OnboardingService {
     this.products = this.db.collection<OnboardingProductDoc>("onboarding.products");
     this.track = this.db.collection<OnboardingTrackDoc>("onboarding.track");
     this.templates = this.db.collection<OnboardingAssistTemplateDoc>("onboarding.templates");
+    this.jobPreviews = this.db.collection<OnboardingJobPreviewDoc>("onboarding.job_previews");
 
     await this.ensureIndexes();
   }
@@ -185,6 +179,10 @@ export class OnboardingService {
     ];
   }
 
+  listCategoryPresetFields(category: OnboardingCategory): Array<{ key: string; label: string }> {
+    return this.scraperService.getCategoryPresetFields(category);
+  }
+
   async startJob(
     input: OnboardingStartRequest,
     context: { ip?: string; userAgent?: string }
@@ -216,6 +214,7 @@ export class OnboardingService {
       expiresAt,
       ip: context.ip,
       userAgent: context.userAgent,
+      counts: this.emptyCounters(),
     };
 
     await this.jobs.insertOne(jobDoc);
@@ -248,6 +247,7 @@ export class OnboardingService {
             percent: 8,
             message: "Discovering platform",
           },
+          counts: this.emptyCounters(),
         },
       },
       { sort: { createdAt: 1 }, returnDocument: "after" }
@@ -267,6 +267,61 @@ export class OnboardingService {
         },
       }
     );
+  }
+
+  async updateJobCounters(jobId: string, delta: Partial<OnboardingJobCounters>): Promise<void> {
+    const current = await this.jobs.findOne(
+      { jobId },
+      { projection: { counts: 1 } }
+    );
+    const base = current?.counts || this.emptyCounters();
+    const next: OnboardingJobCounters = {
+      extracted: Math.max(0, Number(delta.extracted ?? base.extracted ?? 0)),
+      normalized: Math.max(0, Number(delta.normalized ?? base.normalized ?? 0)),
+      embedded: Math.max(0, Number(delta.embedded ?? base.embedded ?? 0)),
+      indexed: Math.max(0, Number(delta.indexed ?? base.indexed ?? 0)),
+    };
+
+    await this.jobs.updateOne(
+      { jobId },
+      {
+        $set: {
+          counts: next,
+          updatedAt: new Date().toISOString(),
+        },
+      }
+    );
+  }
+
+  async setJobLivePreview(jobId: string, products: OnboardingIndexedProduct[]): Promise<void> {
+    const now = new Date();
+    await this.jobPreviews.updateOne(
+      { jobId },
+      {
+        $set: {
+          jobId,
+          products: (products || []).slice(0, 12),
+          updatedAt: now.toISOString(),
+          expiresAt: this.makeExpiry(now, this.demoTtlDays),
+        },
+      },
+      { upsert: true }
+    );
+  }
+
+  async getJobLive(jobId: string): Promise<OnboardingJobLiveResponse | null> {
+    const [job, preview] = await Promise.all([
+      this.jobs.findOne({ jobId }),
+      this.jobPreviews.findOne({ jobId }),
+    ]);
+    if (!job) return null;
+    return {
+      jobId: job.jobId,
+      status: job.status,
+      progress: job.progress,
+      counters: job.counts || this.emptyCounters(),
+      recentProducts: Array.isArray(preview?.products) ? preview!.products.slice(0, 12) : [],
+    };
   }
 
   async markJobFailed(jobId: string, errorCode: string, errorMessage: string): Promise<void> {
@@ -319,6 +374,7 @@ export class OnboardingService {
       inStock: product.inStock,
       source: product.source,
       raw: product.raw,
+      attributesText: this.toAttributesText(product.raw?.attributes as Record<string, unknown> | undefined),
       embedding: product.embedding,
       createdAt: now.toISOString(),
       expiresAt,
@@ -356,6 +412,12 @@ export class OnboardingService {
             step: "done",
             percent: 100,
             message: status === "ready" ? "Demo is ready" : "Partial demo is ready",
+          },
+          counts: {
+            extracted: documents.length,
+            normalized: documents.length,
+            embedded: documents.length,
+            indexed: documents.length,
           },
           finishedAt: now.toISOString(),
           updatedAt: now.toISOString(),
@@ -460,7 +522,9 @@ export class OnboardingService {
     return this.getAssistPreview(sampleProductUrl);
   }
 
-  async saveAssistTemplate(input: OnboardingAssistTemplate): Promise<{ saved: true; domain: string }> {
+  async saveAssistTemplate(
+    input: OnboardingAssistTemplatePayload
+  ): Promise<{ saved: true; domain: string }> {
     const websiteUrl = this.normalizeWebsiteUrl(input.websiteUrl);
     const productUrl = this.normalizeWebsiteUrl(input.productUrl);
     this.assertPublicUrlSafe(websiteUrl);
@@ -511,6 +575,20 @@ export class OnboardingService {
       };
     }
 
+    const customFields = Array.isArray(input.customFields)
+      ? input.customFields
+          .map<OnboardingAssistCustomField>((field) => ({
+            key: String(field.key || "").trim().slice(0, 80),
+            label: String(field.label || "").trim().slice(0, 120),
+            selector: {
+              selector: String(field.selector?.selector || "").trim().slice(0, 400),
+              mode: (field.selector?.mode === "src" ? "src" : "text") as "text" | "src",
+            },
+          }))
+          .filter((field) => field.key && field.label && field.selector.selector)
+          .slice(0, 20)
+      : [];
+
     await this.templates.updateOne(
       { domain: websiteDomain },
       {
@@ -518,7 +596,9 @@ export class OnboardingService {
           domain: websiteDomain,
           websiteUrl,
           sampleProductUrl: productUrl,
+          category: input.category,
           selectors,
+          customFields,
           updatedAt: now.toISOString(),
           expiresAt,
         },
@@ -530,6 +610,86 @@ export class OnboardingService {
     );
 
     return { saved: true, domain: websiteDomain };
+  }
+
+  async extractAssistSample(
+    input: OnboardingAssistTemplatePayload
+  ): Promise<OnboardingAssistExtractSampleResult> {
+    const websiteUrl = this.normalizeWebsiteUrl(input.websiteUrl);
+    const productUrl = this.normalizeWebsiteUrl(input.productUrl);
+    this.assertPublicUrlSafe(websiteUrl);
+    this.assertPublicUrlSafe(productUrl);
+
+    const websiteDomain = new URL(websiteUrl).hostname.toLowerCase();
+    const productDomain = new URL(productUrl).hostname.toLowerCase();
+    if (websiteDomain !== productDomain) {
+      throw new Error("invalid_request");
+    }
+
+    const template: OnboardingAssistRuntimeTemplate = {
+      domain: websiteDomain,
+      websiteUrl,
+      sampleProductUrl: productUrl,
+      category: input.category,
+      selectors: {
+        name: {
+          selector: String(input.selectors?.name?.selector || "").trim(),
+          mode: input.selectors?.name?.mode === "src" ? "src" : "text",
+        },
+        price: input.selectors?.price?.selector
+          ? {
+              selector: String(input.selectors.price.selector).trim(),
+              mode: "text",
+            }
+          : undefined,
+        image: input.selectors?.image?.selector
+          ? {
+              selector: String(input.selectors.image.selector).trim(),
+              mode: input.selectors.image.mode === "src" ? "src" : "text",
+            }
+          : undefined,
+        description: input.selectors?.description?.selector
+          ? {
+              selector: String(input.selectors.description.selector).trim(),
+              mode: "text",
+            }
+          : undefined,
+        inStock: input.selectors?.inStock?.selector
+          ? {
+              selector: String(input.selectors.inStock.selector).trim(),
+              mode: "text",
+            }
+          : undefined,
+      },
+      customFields: Array.isArray(input.customFields)
+        ? input.customFields
+            .map<OnboardingAssistCustomField>((field) => ({
+              key: String(field.key || "").trim().slice(0, 80),
+              label: String(field.label || "").trim().slice(0, 120),
+              selector: {
+                selector: String(field.selector?.selector || "").trim().slice(0, 400),
+                mode: (field.selector?.mode === "src" ? "src" : "text") as "text" | "src",
+              },
+            }))
+            .filter((field) => field.key && field.label && field.selector.selector)
+            .slice(0, 20)
+        : [],
+    };
+
+    if (!template.selectors.name.selector) {
+      throw new Error("invalid_request");
+    }
+
+    const discovery = await this.scraperService.discover(websiteUrl);
+    if (!discovery.robotsAllowed) {
+      throw new Error(discovery.robotsReason || "robots_disallowed");
+    }
+
+    return this.scraperService.extractSingleProductByTemplate(
+      discovery,
+      productUrl,
+      template
+    );
   }
 
   async getAssistTemplateForWebsite(websiteUrl: string): Promise<OnboardingAssistRuntimeTemplate | null> {
@@ -546,7 +706,9 @@ export class OnboardingService {
       domain: doc.domain,
       websiteUrl: doc.websiteUrl,
       sampleProductUrl: doc.sampleProductUrl,
+      category: doc.category,
       selectors: doc.selectors,
+      customFields: Array.isArray(doc.customFields) ? doc.customFields : [],
     };
   }
 
@@ -691,6 +853,25 @@ export class OnboardingService {
     return copy.toISOString();
   }
 
+  private emptyCounters(): OnboardingJobCounters {
+    return {
+      extracted: 0,
+      normalized: 0,
+      embedded: 0,
+      indexed: 0,
+    };
+  }
+
+  private toAttributesText(attributes?: Record<string, unknown>): string | undefined {
+    if (!attributes || typeof attributes !== "object") return undefined;
+    const text = Object.entries(attributes)
+      .map(([key, value]) => `${key} ${String(value || "")}`.trim())
+      .filter(Boolean)
+      .join(" | ")
+      .slice(0, 2000);
+    return text || undefined;
+  }
+
   private async fetchHtmlPreview(url: string): Promise<string> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -800,7 +981,12 @@ export class OnboardingService {
       this.products.createIndex({ demoId: 1 }),
       this.products.createIndex({ jobId: 1 }),
       this.products.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-      this.products.createIndex({ name: "text", description: "text", brand: "text" }),
+      this.products.createIndex({
+        name: "text",
+        description: "text",
+        brand: "text",
+        attributesText: "text",
+      }),
 
       this.demos.createIndex({ tokenHash: 1 }, { unique: true }),
       this.demos.createIndex({ demoId: 1 }, { unique: true }),
@@ -811,6 +997,9 @@ export class OnboardingService {
 
       this.templates.createIndex({ domain: 1 }, { unique: true }),
       this.templates.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+
+      this.jobPreviews.createIndex({ jobId: 1 }, { unique: true }),
+      this.jobPreviews.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
 
     await this.ensureVectorIndexBestEffort();

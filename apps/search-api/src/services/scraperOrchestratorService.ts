@@ -1,8 +1,10 @@
-import type { OnboardingCategory } from "../types/index.js";
 import type {
+  OnboardingAssistExtractSampleResult,
   OnboardingAssistRuntimeTemplate,
   OnboardingAssistSelector,
-} from "./onboardingService.js";
+  OnboardingCategory,
+  OnboardingSampleProduct,
+} from "../types/index.js";
 import { ShopifyAdapter } from "./platformAdapters/shopifyAdapter.js";
 import { WooCommerceAdapter } from "./platformAdapters/woocommerceAdapter.js";
 import type { ScrapedProduct } from "./platformAdapters/types.js";
@@ -24,6 +26,117 @@ export interface ScraperResult {
   sourceBreakdown: Record<string, number>;
   usedBrowserFallback: boolean;
 }
+
+const CATEGORY_PRESET_FIELDS: Record<
+  OnboardingCategory,
+  Array<{ key: string; label: string }>
+> = {
+  fashion: [
+    { key: "material", label: "חומר" },
+    { key: "color", label: "צבע" },
+    { key: "size", label: "מידה" },
+    { key: "fit", label: "גזרה" },
+  ],
+  footwear: [
+    { key: "size", label: "מידה" },
+    { key: "material", label: "חומר" },
+    { key: "sole", label: "סוליה" },
+  ],
+  wine: [
+    { key: "country", label: "מוצא" },
+    { key: "grape", label: "זן ענבים" },
+    { key: "volume", label: "נפח" },
+    { key: "alcohol", label: "אחוז אלכוהול" },
+    { key: "kosher", label: "כשרות" },
+    { key: "winery", label: "יקב" },
+    { key: "vintage", label: "בציר" },
+  ],
+  furniture: [
+    { key: "material", label: "חומר" },
+    { key: "dimensions", label: "מידות" },
+    { key: "color", label: "צבע" },
+  ],
+  beauty: [
+    { key: "skin_type", label: "סוג עור" },
+    { key: "volume", label: "נפח" },
+    { key: "usage", label: "שימוש" },
+  ],
+  electronics: [
+    { key: "brand_model", label: "דגם" },
+    { key: "storage", label: "נפח אחסון" },
+    { key: "connectivity", label: "קישוריות" },
+  ],
+  jewelry: [
+    { key: "material", label: "חומר" },
+    { key: "stone", label: "אבן" },
+    { key: "size", label: "מידה" },
+  ],
+  home_decor: [
+    { key: "material", label: "חומר" },
+    { key: "dimensions", label: "מידות" },
+    { key: "color", label: "צבע" },
+  ],
+  sports: [
+    { key: "sport_type", label: "סוג ספורט" },
+    { key: "size", label: "מידה" },
+    { key: "material", label: "חומר" },
+  ],
+  pets: [
+    { key: "pet_type", label: "סוג חיה" },
+    { key: "weight_range", label: "טווח משקל" },
+    { key: "volume", label: "נפח" },
+  ],
+  toys: [
+    { key: "age", label: "גיל מומלץ" },
+    { key: "material", label: "חומר" },
+    { key: "brand", label: "מותג" },
+  ],
+  kids: [
+    { key: "age", label: "גיל" },
+    { key: "size", label: "מידה" },
+    { key: "material", label: "חומר" },
+  ],
+  food: [
+    { key: "weight", label: "משקל" },
+    { key: "origin", label: "מקור" },
+    { key: "kosher", label: "כשרות" },
+  ],
+  supplements: [
+    { key: "dosage", label: "מינון" },
+    { key: "servings", label: "מנות" },
+    { key: "ingredients", label: "רכיבים" },
+  ],
+  books: [
+    { key: "author", label: "מחבר" },
+    { key: "language", label: "שפה" },
+    { key: "publisher", label: "הוצאה" },
+  ],
+  automotive: [
+    { key: "compatibility", label: "תאימות" },
+    { key: "brand", label: "מותג" },
+    { key: "warranty", label: "אחריות" },
+  ],
+  garden: [
+    { key: "dimensions", label: "מידות" },
+    { key: "material", label: "חומר" },
+    { key: "outdoor_use", label: "שימוש חוץ" },
+  ],
+  travel: [
+    { key: "capacity", label: "קיבולת" },
+    { key: "dimensions", label: "מידות" },
+    { key: "weight", label: "משקל" },
+  ],
+  bags: [
+    { key: "material", label: "חומר" },
+    { key: "capacity", label: "קיבולת" },
+    { key: "dimensions", label: "מידות" },
+  ],
+  lingerie: [
+    { key: "size", label: "מידה" },
+    { key: "material", label: "חומר" },
+    { key: "support", label: "תמיכה" },
+  ],
+};
 
 export class ScraperOrchestratorService {
   private readonly shopifyAdapter = new ShopifyAdapter();
@@ -444,6 +557,18 @@ export class ScraperOrchestratorService {
         : "";
       const inStock = this.parseInStock(stockRaw || html);
 
+      const attributes = this.collectAssistAttributes(
+        html,
+        template
+      );
+      const parsedWineAttributes = this.parseWineAttributesFromText(
+        [name, description || "", ...Object.values(attributes)].join(" | ")
+      );
+      const mergedAttributes = {
+        ...attributes,
+        ...parsedWineAttributes,
+      };
+
       if (!name || (!price && !description && !imageUrl)) continue;
 
       out.push({
@@ -455,12 +580,89 @@ export class ScraperOrchestratorService {
         productUrl: url,
         inStock,
         source: "generic_static",
+        raw: {
+          attributes: mergedAttributes,
+        },
       });
 
       if (out.length >= Math.max(limit * 2, 80)) break;
     }
 
     return out;
+  }
+
+  getCategoryPresetFields(category: OnboardingCategory): Array<{ key: string; label: string }> {
+    return [...(CATEGORY_PRESET_FIELDS[category] || [])];
+  }
+
+  async extractSingleProductByTemplate(
+    discovery: ScraperDiscovery,
+    productUrl: string,
+    template: OnboardingAssistRuntimeTemplate
+  ): Promise<OnboardingAssistExtractSampleResult> {
+    const html = await this.fetchText(productUrl).catch(() => "");
+    if (!html) {
+      throw new Error("assist_preview_unavailable");
+    }
+
+    const sample: OnboardingSampleProduct = {
+      name: this.extractFieldByAssistSelector(html, template.selectors.name, "text") || undefined,
+      price:
+        this.parsePriceLoose(
+          template.selectors.price
+            ? this.extractFieldByAssistSelector(html, template.selectors.price, "text")
+            : ""
+        ) || undefined,
+      imageUrl: this.toAbsoluteUrl(
+        template.selectors.image
+          ? this.extractFieldByAssistSelector(html, template.selectors.image, "src")
+          : "",
+        discovery.origin
+      ),
+      description:
+        (template.selectors.description
+          ? this.extractFieldByAssistSelector(html, template.selectors.description, "text")
+          : "") || undefined,
+      inStock: this.parseInStock(
+        template.selectors.inStock
+          ? this.extractFieldByAssistSelector(html, template.selectors.inStock, "text")
+          : html
+      ),
+      currency: this.detectCurrencyFromHtml(html),
+      attributes: {},
+    };
+
+    const collected = this.collectAssistAttributes(html, template);
+    const wineParsed = this.parseWineAttributesFromText(
+      [
+        sample.name || "",
+        sample.description || "",
+        ...Object.values(collected),
+      ].join(" | ")
+    );
+    sample.attributes = { ...collected, ...wineParsed };
+
+    const missingFields: string[] = [];
+    if (!sample.name) missingFields.push("name");
+    if (!Number.isFinite(Number(sample.price || 0)) || Number(sample.price || 0) <= 0) {
+      missingFields.push("price");
+    }
+    if (!sample.description) missingFields.push("description");
+    if (!sample.imageUrl) missingFields.push("image");
+
+    const requiredCustom = (template.customFields || [])
+      .map((field) => field.key)
+      .filter((key) => Boolean(key));
+    for (const key of requiredCustom) {
+      if (!sample.attributes[key]) {
+        missingFields.push(`custom:${key}`);
+      }
+    }
+
+    return {
+      sampleProduct: sample,
+      missingFields,
+    };
   }
 
   private async discoverProductUrls(
@@ -522,6 +724,66 @@ export class ScraperOrchestratorService {
     }
 
     return Array.from(urls).slice(0, maxUrls);
+  }
+
+  private collectAssistAttributes(
+    html: string,
+    template: OnboardingAssistRuntimeTemplate
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const field of template.customFields || []) {
+      const value = this.extractFieldByAssistSelector(
+        html,
+        field.selector,
+        field.selector.mode === "src" ? "src" : "text"
+      );
+      const cleaned = this.stripHtml(String(value || "")).slice(0, 300);
+      if (cleaned) out[field.key] = cleaned;
+    }
+
+    return out;
+  }
+
+  private parseWineAttributesFromText(text: string): Record<string, string> {
+    const value = this.stripHtml(String(text || ""));
+    if (!value) return {};
+    const lower = value.toLowerCase();
+    const out: Record<string, string> = {};
+
+    const volumeMatch = value.match(/(\d{3,4})\s?(ml|מ\"ל|מל|cc)|(\d(?:\.\d)?)\s?(l|ליטר|ל')/i);
+    if (volumeMatch) {
+      out.volume = String(volumeMatch[0] || "").trim();
+    }
+
+    const alcoholMatch = value.match(/(\d{1,2}(?:\.\d)?)\s?%/);
+    if (alcoholMatch) {
+      out.alcohol = String(alcoholMatch[1] || "").trim();
+    }
+
+    const vintageMatch = value.match(/\b(19\d{2}|20\d{2})\b/);
+    if (vintageMatch) {
+      out.vintage = String(vintageMatch[1] || "").trim();
+    }
+
+    if (/(כשר|kosher)/i.test(lower)) {
+      out.kosher = "כשר";
+    }
+
+    const grapeMatch = value.match(
+      /(cabernet|merlot|syrah|shiraz|pinot noir|chardonnay|sauvignon blanc|riesling|גרנאש|מרלו|קברנה|שרדונה|סוביניון|ריזלינג|פינו נואר)/i
+    );
+    if (grapeMatch) {
+      out.grape = String(grapeMatch[1] || "").trim();
+    }
+
+    const countryMatch = value.match(
+      /(israel|france|italy|spain|portugal|argentina|chile|usa|australia|south africa|ישראל|צרפת|איטליה|ספרד|פורטוגל|ארגנטינה|צ'ילה|ארה\"ב|אוסטרליה)/i
+    );
+    if (countryMatch) {
+      out.country = String(countryMatch[1] || "").trim();
+    }
+
+    return out;
   }
 
   private extractFieldByAssistSelector(

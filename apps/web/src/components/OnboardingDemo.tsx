@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { buildDemoCatchphrase, getCategoryPlaceholders } from "../constants/onboardingPlaceholders";
 import { resolveProductImageUrl } from "../utils/productImage";
 
 interface DemoProduct {
@@ -67,6 +68,16 @@ function toPlainText(value?: string): string {
   return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function safeHostname(rawUrl?: string): string {
+  const input = String(rawUrl || "").trim();
+  if (!input) return "החנות שלך";
+  try {
+    return new URL(input).hostname;
+  } catch {
+    return "החנות שלך";
+  }
+}
+
 export function OnboardingDemo() {
   const { token } = useParams<{ token: string }>();
   const [loading, setLoading] = useState(true);
@@ -75,6 +86,7 @@ export function OnboardingDemo() {
   const [demo, setDemo] = useState<DemoMetadataResponse | null>(null);
   const [results, setResults] = useState<DemoSearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
 
   const API_URL = import.meta.env.VITE_SEARCH_API_URL || "https://geffen.onrender.com";
 
@@ -100,8 +112,33 @@ export function OnboardingDemo() {
     void load();
   }, [API_URL, token]);
 
-  const runSearch = async () => {
-    if (!token || !query.trim()) return;
+  const placeholders = useMemo(() => {
+    return getCategoryPlaceholders(demo?.category);
+  }, [demo?.category]);
+
+  const activePlaceholder = useMemo(() => {
+    if (placeholders.length === 0) return "Search your products semantically...";
+    return placeholders[placeholderIndex % placeholders.length];
+  }, [placeholderIndex, placeholders]);
+
+  useEffect(() => {
+    setPlaceholderIndex(0);
+  }, [demo?.category]);
+
+  useEffect(() => {
+    if (query.trim()) return;
+    if (!placeholders.length) return;
+    const timer = window.setInterval(() => {
+      setPlaceholderIndex((prev) => (prev + 1) % placeholders.length);
+    }, 2800);
+    return () => window.clearInterval(timer);
+  }, [placeholders, query]);
+
+  const runSearch = async (nextQuery?: string) => {
+    const effectiveQuery = String(nextQuery ?? query).trim();
+    if (!token || !effectiveQuery) return;
+    if (nextQuery) setQuery(effectiveQuery);
+
     setSearching(true);
     setError(null);
 
@@ -111,7 +148,7 @@ export function OnboardingDemo() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query: query.trim(), limit: 24, offset: 0 }),
+        body: JSON.stringify({ query: effectiveQuery, limit: 24, offset: 0 }),
       });
 
       const payload = await response.json();
@@ -133,21 +170,58 @@ export function OnboardingDemo() {
     return demo?.previewProducts || [];
   }, [demo?.previewProducts, results?.products]);
 
+  const domain = useMemo(() => safeHostname(demo?.websiteUrl), [demo?.websiteUrl]);
+
+  const catchphrase = useMemo(() => {
+    return buildDemoCatchphrase({
+      domain,
+      category: demo?.category,
+      productCount: demo?.productCount,
+    });
+  }, [demo?.category, demo?.productCount, domain]);
+
   return (
     <div className="min-h-screen bg-[#fffdfd] px-6 py-8 text-slate-900 lg:px-10">
       <div className="mx-auto max-w-[1400px] space-y-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.15em] text-geffen-700">Semantic Demo</p>
-            <h1 className="text-2xl font-semibold">Your Store Products</h1>
+        <section className="overflow-hidden rounded-3xl border border-geffen-100 bg-gradient-to-br from-geffen-50 via-white to-emerald-50 p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-xs uppercase tracking-[0.15em] text-geffen-700">Semantic Demo</p>
+              <h1 className="mt-1 text-3xl font-semibold text-slate-900">הדמו של {domain}</h1>
+              <p className="mt-2 text-sm text-slate-600">{catchphrase}</p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Link
+                to="/onboarding"
+                className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-xs font-semibold text-geffen-700 hover:border-geffen-400"
+              >
+                דמו חדש
+              </Link>
+            </div>
           </div>
-          <Link
-            to="/onboarding"
-            className="rounded-full border border-geffen-200 px-4 py-2 text-xs font-semibold text-geffen-700 hover:border-geffen-400 hover:bg-geffen-50"
-          >
-            New Demo
-          </Link>
-        </div>
+
+          {demo && (
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+              <div className="rounded-xl border border-geffen-100 bg-white/90 p-3">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Domain</p>
+                <p className="text-sm font-semibold text-slate-900">{domain}</p>
+              </div>
+              <div className="rounded-xl border border-geffen-100 bg-white/90 p-3">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Category</p>
+                <p className="text-sm font-semibold text-slate-900">{demo.category}</p>
+              </div>
+              <div className="rounded-xl border border-geffen-100 bg-white/90 p-3">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Products</p>
+                <p className="text-sm font-semibold text-slate-900">{demo.productCount}</p>
+              </div>
+              <div className="rounded-xl border border-geffen-100 bg-white/90 p-3">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Status</p>
+                <p className="text-sm font-semibold text-slate-900">{demo.status}</p>
+              </div>
+            </div>
+          )}
+        </section>
 
         {error && (
           <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">{error}</div>
@@ -159,58 +233,54 @@ export function OnboardingDemo() {
           </div>
         ) : (
           <>
-            {demo && (
-              <section className="rounded-2xl border border-geffen-100 bg-white p-4 shadow-sm">
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-                  <div className="rounded-xl border border-geffen-100 bg-geffen-50 p-3">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-geffen-700">Domain</p>
-                    <p className="text-sm font-semibold text-slate-900">{new URL(demo.websiteUrl).hostname}</p>
-                  </div>
-                  <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Category</p>
-                    <p className="text-sm font-semibold text-slate-900">{demo.category}</p>
-                  </div>
-                  <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Products</p>
-                    <p className="text-sm font-semibold text-slate-900">{demo.productCount}</p>
-                  </div>
-                  <div className="rounded-xl border border-geffen-100 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Status</p>
-                    <p className="text-sm font-semibold text-slate-900">{demo.status}</p>
-                  </div>
-                </div>
+            <section className="rounded-2xl border border-geffen-100 bg-white p-4 shadow-sm">
+              <div className="flex gap-3">
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      void runSearch();
+                    }
+                  }}
+                  placeholder={activePlaceholder}
+                  className="h-11 flex-1 rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void runSearch();
+                  }}
+                  disabled={searching || !query.trim()}
+                  className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+                >
+                  {searching ? "Searching..." : "Search"}
+                </button>
+              </div>
 
-                <div className="mt-4 flex gap-3">
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void runSearch();
-                      }
-                    }}
-                    placeholder="Search your products semantically..."
-                    className="h-11 flex-1 rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
-                  />
+              <div className="mt-3 flex flex-wrap gap-2">
+                {placeholders.slice(0, 3).map((item) => (
                   <button
+                    key={item}
                     type="button"
                     onClick={() => {
-                      void runSearch();
+                      void runSearch(item);
                     }}
-                    disabled={searching || !query.trim()}
-                    className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+                    className="rounded-full border border-geffen-200 bg-geffen-50 px-3 py-1 text-xs text-geffen-800 hover:border-geffen-400"
                   >
-                    {searching ? "Searching..." : "Search"}
+                    {item}
                   </button>
-                </div>
+                ))}
+              </div>
 
-                {results?.metadata && (
-                  <div className="mt-3 rounded-xl border border-geffen-100 bg-geffen-50/60 p-3 text-xs text-slate-600">
-                    <span className="font-semibold text-geffen-700">Retrieval</span>: {results.metadata.retrieval.mode} | text {results.metadata.retrieval.textCandidates} | vector {results.metadata.retrieval.vectorCandidates} | merged {results.metadata.retrieval.mergedCandidates} | total {results.metadata.timings.total}ms
-                  </div>
-                )}
-              </section>
-            )}
+              {results?.metadata && (
+                <div className="mt-3 rounded-xl border border-geffen-100 bg-geffen-50/60 p-3 text-xs text-slate-600">
+                  <span className="font-semibold text-geffen-700">Retrieval</span>: {results.metadata.retrieval.mode} |
+                  text {results.metadata.retrieval.textCandidates} | vector {results.metadata.retrieval.vectorCandidates} |
+                  merged {results.metadata.retrieval.mergedCandidates} | total {results.metadata.timings.total}ms
+                </div>
+              )}
+            </section>
 
             {activeProducts.length === 0 ? (
               <div className="rounded-2xl border border-geffen-100 bg-white py-20 text-center">

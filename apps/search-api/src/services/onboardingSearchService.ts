@@ -127,6 +127,7 @@ export class OnboardingSearchService {
         { description: { $regex: this.escapeRegExp(term), $options: "i" } },
         { brand: { $regex: this.escapeRegExp(term), $options: "i" } },
         { category: { $regex: this.escapeRegExp(term), $options: "i" } },
+        { attributesText: { $regex: this.escapeRegExp(term), $options: "i" } },
       ],
     }));
 
@@ -216,6 +217,7 @@ export class OnboardingSearchService {
         inStock: 1,
         source: 1,
         raw: 1,
+        attributesText: 1,
         createdAt: 1,
         expiresAt: 1,
         embedding: 1,
@@ -313,6 +315,7 @@ export class OnboardingSearchService {
         product.description || "",
         product.brand || "",
         product.category || "",
+        this.attributesText(product.raw?.attributes as Record<string, unknown> | undefined),
       ].join(" ")
     );
 
@@ -398,6 +401,13 @@ export class OnboardingSearchService {
     if (n <= 0) return 0;
     if (n >= 1) return 1;
     return n;
+  }
+
+  private attributesText(attributes?: Record<string, unknown>): string {
+    if (!attributes || typeof attributes !== "object") return "";
+    return Object.entries(attributes)
+      .map(([k, v]) => `${k} ${String(v || "")}`)
+      .join(" ");
   }
 
   private normalizeForTextSearch(value: string): string {

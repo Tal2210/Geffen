@@ -88,6 +88,12 @@ export class OnboardingWorker {
     category: OnboardingCategory;
   }): Promise<void> {
     await this.progress(job.jobId, "discover", 12, "Checking robots and detecting platform");
+    await this.onboardingService.updateJobCounters(job.jobId, {
+      extracted: 0,
+      normalized: 0,
+      embedded: 0,
+      indexed: 0,
+    });
     const discovery = await this.scraper.discover(job.websiteUrl);
     if (!discovery.robotsAllowed) {
       throw new Error(discovery.robotsReason || "robots_disallowed");
@@ -104,6 +110,9 @@ export class OnboardingWorker {
       50,
       assistTemplate || undefined
     );
+    await this.onboardingService.updateJobCounters(job.jobId, {
+      extracted: scraped.products.length,
+    });
     if (scraped.products.length === 0) {
       throw new Error("scrape_no_products");
     }
@@ -117,20 +126,74 @@ export class OnboardingWorker {
       40,
       50
     );
+    await this.onboardingService.updateJobCounters(job.jobId, {
+      normalized: normalized.products.length,
+    });
 
     if (normalized.products.length === 0) {
       throw new Error("scrape_no_products");
     }
 
+    await this.onboardingService.setJobLivePreview(
+      job.jobId,
+      normalized.products.slice(0, 12).map((item, idx) => ({
+        _id: `preview-${idx}`,
+        demoId: "",
+        jobId: job.jobId,
+        merchantId: `onboarding-preview:${job.jobId}`,
+        name: item.name,
+        description: item.description,
+        price: item.price,
+        currency: item.currency,
+        imageUrl: item.imageUrl,
+        productUrl: item.productUrl,
+        brand: item.brand,
+        category: item.category,
+        inStock: item.inStock,
+        source: item.source,
+        raw: item.raw,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      }))
+    );
+
     await this.progress(job.jobId, "sample", 56, `Sampled ${normalized.products.length} products`);
 
     await this.progress(job.jobId, "embed", 72, "Generating embeddings");
-    const withEmbeddings = await this.embedProducts(normalized.products);
+    const withEmbeddings = await this.embedProducts(job.jobId, normalized.products);
+    await this.onboardingService.updateJobCounters(job.jobId, {
+      embedded: withEmbeddings.length,
+    });
+    await this.onboardingService.setJobLivePreview(
+      job.jobId,
+      withEmbeddings.slice(0, 12).map((item, idx) => ({
+        _id: `embedded-${idx}`,
+        demoId: "",
+        jobId: job.jobId,
+        merchantId: `onboarding-preview:${job.jobId}`,
+        name: item.name,
+        description: item.description,
+        price: item.price,
+        currency: item.currency,
+        imageUrl: item.imageUrl,
+        productUrl: item.productUrl,
+        brand: item.brand,
+        category: item.category,
+        inStock: item.inStock,
+        source: item.source,
+        raw: item.raw,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      }))
+    );
     if (withEmbeddings.length === 0) {
       throw new Error("embedding_failed");
     }
 
     await this.progress(job.jobId, "index", 86, "Indexing demo products");
+    await this.onboardingService.updateJobCounters(job.jobId, {
+      indexed: withEmbeddings.length,
+    });
 
     await this.progress(job.jobId, "finalize", 94, "Preparing demo URL");
     const partial = normalized.isPartial || withEmbeddings.length < 30;
@@ -144,7 +207,7 @@ export class OnboardingWorker {
     });
   }
 
-  private async embedProducts(products: Array<{
+  private async embedProducts(jobId: string, products: Array<{
     name: string;
     description?: string;
     brand?: string;
@@ -177,6 +240,11 @@ export class OnboardingWorker {
         product.brand,
         product.category,
         product.description,
+        product.raw?.attributes
+          ? Object.entries(product.raw.attributes as Record<string, unknown>)
+              .map(([k, v]) => `${k}: ${String(v || "")}`)
+              .join(" | ")
+          : "",
       ]
         .filter(Boolean)
         .join(" | ")
@@ -185,6 +253,9 @@ export class OnboardingWorker {
       try {
         const embedding = await this.embeddingService.generateEmbedding(text);
         out.push({ ...product, embedding });
+        await this.onboardingService.updateJobCounters(jobId, {
+          embedded: out.length,
+        });
       } catch {
         // Skip failed rows; keep pipeline resilient.
       }

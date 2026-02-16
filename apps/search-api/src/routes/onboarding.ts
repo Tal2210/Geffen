@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import {
+  OnboardingCategorySchema,
   OnboardingDemoSearchRequestSchema,
   OnboardingStartRequestSchema,
   OnboardingTrackEventSchema,
@@ -26,9 +27,20 @@ export function createOnboardingRoutes(
       mode: z.enum(["text", "src"]).default("text"),
     });
 
+    const AssistCustomFieldSchema = z.object({
+      key: z
+        .string()
+        .min(1)
+        .max(80)
+        .regex(/^[a-zA-Z0-9_:-]+$/),
+      label: z.string().min(1).max(120),
+      selector: AssistSelectorSchema,
+    });
+
     const AssistTemplateRequestSchema = z.object({
       websiteUrl: z.string().url().max(2048),
       productUrl: z.string().url().max(2048),
+      category: OnboardingCategorySchema.optional(),
       selectors: z.object({
         name: AssistSelectorSchema,
         price: AssistSelectorSchema.optional(),
@@ -36,12 +48,27 @@ export function createOnboardingRoutes(
         description: AssistSelectorSchema.optional(),
         inStock: AssistSelectorSchema.optional(),
       }),
+      customFields: z.array(AssistCustomFieldSchema).max(20).optional(),
     });
 
     server.get("/onboarding/categories", async () => {
       return {
         categories: onboardingService.listCategories(),
       };
+    });
+
+    server.get<{ Params: { category: string } }>("/onboarding/categories/:category/fields", async (request, reply) => {
+      const parsed = OnboardingCategorySchema.safeParse(request.params?.category);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          message: "Invalid category",
+        });
+      }
+      return reply.send({
+        category: parsed.data,
+        fields: onboardingService.listCategoryPresetFields(parsed.data),
+      });
     });
 
     server.post("/onboarding/assist/preview", async (request, reply) => {
@@ -104,6 +131,27 @@ export function createOnboardingRoutes(
       }
     });
 
+    server.post("/onboarding/assist/extract-sample", async (request, reply) => {
+      const parsed = AssistTemplateRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const result = await onboardingService.extractAssistSample(parsed.data);
+        return reply.send(result);
+      } catch (error) {
+        const code = mapOnboardingErrorCode(error);
+        return reply.status(code === "invalid_url" ? 400 : 422).send({
+          error: code,
+          message: "Could not extract sample product from selected fields.",
+        });
+      }
+    });
+
     server.post("/onboarding/start", async (request, reply) => {
       const parsed = OnboardingStartRequestSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -154,6 +202,25 @@ export function createOnboardingRoutes(
       }
 
       return reply.send(status);
+    });
+
+    server.get<{ Params: { jobId: string } }>("/onboarding/jobs/:jobId/live", async (request, reply) => {
+      const jobId = String(request.params?.jobId || "").trim();
+      if (!jobId) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          message: "Missing jobId",
+        });
+      }
+
+      const live = await onboardingService.getJobLive(jobId);
+      if (!live) {
+        return reply.status(404).send({
+          error: "not_found",
+          message: "Job not found",
+        });
+      }
+      return reply.send(live);
     });
 
     server.get<{ Params: { token: string } }>("/onboarding/demos/:token", async (request, reply) => {

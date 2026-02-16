@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-type AssistFieldKey = "name" | "price" | "image" | "description" | "inStock";
-
-interface AssistSelectorState {
-  selector: string;
-  mode: "text" | "src";
-  sampleText?: string;
-}
+type FieldMode = "text" | "src";
 
 interface AssistPreviewResponse {
   normalizedUrl: string;
@@ -14,105 +8,210 @@ interface AssistPreviewResponse {
   html: string;
 }
 
+interface AssistExtractSampleResponse {
+  sampleProduct: {
+    name?: string;
+    price?: number;
+    currency?: string;
+    imageUrl?: string;
+    description?: string;
+    inStock?: boolean;
+    attributes: Record<string, string>;
+  };
+  missingFields: string[];
+}
+
+interface CategoryPresetField {
+  key: string;
+  label: string;
+}
+
+interface FieldItem {
+  key: string;
+  label: string;
+  mode: FieldMode;
+  required?: boolean;
+  isCustom?: boolean;
+  selector?: string;
+  sampleText?: string;
+}
+
+export interface GuideTemplatePayload {
+  websiteUrl: string;
+  productUrl: string;
+  category: string;
+  selectors: {
+    name: { selector: string; mode: FieldMode };
+    price?: { selector: string; mode: FieldMode };
+    image?: { selector: string; mode: FieldMode };
+    description?: { selector: string; mode: FieldMode };
+    inStock?: { selector: string; mode: FieldMode };
+  };
+  customFields: Array<{
+    key: string;
+    label: string;
+    selector: { selector: string; mode: FieldMode };
+  }>;
+}
+
 interface Props {
   apiUrl: string;
   websiteUrl: string;
-  initialProductUrl?: string;
-  onTemplateSaved?: () => void;
+  category: string;
+  onSampleReady: (data: {
+    templatePayload: GuideTemplatePayload;
+    sampleResult: AssistExtractSampleResponse;
+    capturedCount: number;
+    requiredCount: number;
+  }) => void;
 }
 
-const FIELD_CONFIG: Array<{
-  key: AssistFieldKey;
-  label: string;
-  required?: boolean;
-  defaultMode: "text" | "src";
-}> = [
-  { key: "name", label: "Product Name", required: true, defaultMode: "text" },
-  { key: "price", label: "Price", defaultMode: "text" },
-  { key: "image", label: "Main Image", defaultMode: "src" },
-  { key: "description", label: "Description", defaultMode: "text" },
-  { key: "inStock", label: "Stock Status", defaultMode: "text" },
+const FALLBACK_PRESETS: Record<string, CategoryPresetField[]> = {
+  wine: [
+    { key: "country", label: "מוצא" },
+    { key: "grape", label: "זן ענבים" },
+    { key: "volume", label: "נפח" },
+    { key: "alcohol", label: "אחוז אלכוהול" },
+    { key: "kosher", label: "כשרות" },
+    { key: "winery", label: "יקב" },
+    { key: "vintage", label: "בציר" },
+  ],
+};
+
+const BASE_FIELDS: FieldItem[] = [
+  { key: "name", label: "שם המוצר", mode: "text", required: true },
+  { key: "price", label: "מחיר", mode: "text", required: true },
+  { key: "description", label: "תיאור", mode: "text", required: true },
+  { key: "image", label: "תמונה", mode: "src", required: true },
+  { key: "inStock", label: "מצב מלאי", mode: "text" },
 ];
 
 export function OnboardingAssistTrainer({
   apiUrl,
   websiteUrl,
-  initialProductUrl,
-  onTemplateSaved,
+  category,
+  onSampleReady,
 }: Props) {
-  const [productUrl, setProductUrl] = useState(initialProductUrl || "");
+  const [productUrl, setProductUrl] = useState("");
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewBaseUrl, setPreviewBaseUrl] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [loadingSample, setLoadingSample] = useState(false);
   const [autoTried, setAutoTried] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [activeField, setActiveField] = useState<AssistFieldKey>("name");
-  const [selectors, setSelectors] = useState<Partial<Record<AssistFieldKey, AssistSelectorState>>>(
-    {}
-  );
+  const [presetFields, setPresetFields] = useState<CategoryPresetField[]>([]);
+  const [fields, setFields] = useState<FieldItem[]>(BASE_FIELDS);
+  const [activeFieldKey, setActiveFieldKey] = useState<string>("name");
+  const [newCustomLabel, setNewCustomLabel] = useState("");
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const payload = event.data as any;
       if (!payload || payload.type !== "assist-click") return;
-      const field = activeField;
-      const config = FIELD_CONFIG.find((item) => item.key === field);
-      if (!config) return;
+      const selector = String(payload.simpleSelector || payload.fullSelector || "").trim();
+      if (!selector) return;
 
-      const rawSelector = String(payload.simpleSelector || payload.fullSelector || "").trim();
-      if (!rawSelector) return;
       const sampleText = String(payload.text || payload.src || payload.href || "").trim();
-
-      setSelectors((prev) => ({
-        ...prev,
-        [field]: {
-          selector: rawSelector,
-          mode:
-            config.key === "image" && String(payload.tag || "").toLowerCase() === "img"
-              ? "src"
-              : config.defaultMode,
-          sampleText: sampleText.slice(0, 180),
-        },
-      }));
-      setSuccess(null);
+      setFields((prev) =>
+        prev.map((item) =>
+          item.key === activeFieldKey
+            ? {
+                ...item,
+                selector,
+                mode:
+                  item.key === "image" && String(payload.tag || "").toLowerCase() === "img"
+                    ? "src"
+                    : item.mode,
+                sampleText: sampleText.slice(0, 180),
+              }
+            : item
+        )
+      );
       setError(null);
+      setSuccess("השדה נקלט. אפשר להמשיך לשדה הבא.");
     };
 
     window.addEventListener("message", onMessage);
     return () => {
       window.removeEventListener("message", onMessage);
     };
-  }, [activeField]);
-
-  useEffect(() => {
-    if (initialProductUrl) {
-      setProductUrl(initialProductUrl);
-    }
-  }, [initialProductUrl]);
+  }, [activeFieldKey]);
 
   useEffect(() => {
     setPreviewHtml("");
     setPreviewBaseUrl("");
-    setSelectors({});
+    setProductUrl("");
     setAutoTried(false);
     setError(null);
     setSuccess(null);
-    if (initialProductUrl) {
-      setProductUrl(initialProductUrl);
-    }
-  }, [websiteUrl, initialProductUrl]);
+    setFields(BASE_FIELDS);
+    setActiveFieldKey("name");
+  }, [websiteUrl, category]);
+
+  useEffect(() => {
+    const run = async () => {
+      if (!category) return;
+      try {
+        const response = await fetch(
+          `${apiUrl}/onboarding/categories/${encodeURIComponent(category)}/fields`
+        );
+        const payload = await response.json();
+        if (!response.ok) throw new Error();
+        const rows = Array.isArray(payload?.fields) ? payload.fields : [];
+        if (rows.length > 0) {
+          setPresetFields(
+            rows
+              .map((item: any) => ({
+                key: String(item?.key || "").trim(),
+                label: String(item?.label || "").trim(),
+              }))
+              .filter((item: CategoryPresetField) => item.key && item.label)
+          );
+          return;
+        }
+      } catch {
+        // fallback below
+      }
+      setPresetFields(FALLBACK_PRESETS[category] || []);
+    };
+
+    void run();
+  }, [apiUrl, category]);
+
+  useEffect(() => {
+    if (!websiteUrl.trim()) return;
+    if (autoTried) return;
+    if (previewHtml) return;
+    setAutoTried(true);
+    void loadAutoPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [websiteUrl, autoTried, previewHtml]);
+
+  const requiredCount = useMemo(
+    () => fields.filter((item) => item.required).length,
+    [fields]
+  );
+
+  const capturedRequiredCount = useMemo(
+    () => fields.filter((item) => item.required && item.selector).length,
+    [fields]
+  );
+
+  const capturedCount = useMemo(
+    () => fields.filter((item) => item.selector).length,
+    [fields]
+  );
+
+  const canCheckSample =
+    Boolean(productUrl.trim()) && capturedRequiredCount >= requiredCount && !loadingPreview;
 
   const srcDoc = useMemo(() => {
     if (!previewHtml) return "";
     return buildPreviewDoc(previewHtml, previewBaseUrl);
   }, [previewHtml, previewBaseUrl]);
 
-  const canSave = Boolean(websiteUrl.trim() && productUrl.trim() && selectors.name?.selector);
-
   const loadAutoPreview = async () => {
-    if (!websiteUrl.trim()) return;
     setLoadingPreview(true);
     setError(null);
     setSuccess(null);
@@ -139,19 +238,20 @@ export function OnboardingAssistTrainer({
       if (payload.normalizedUrl) {
         setProductUrl(String(payload.normalizedUrl));
       }
-      setSuccess("Loaded a sample product page automatically. Now click each field to train the scraper.");
+      setSuccess("דף מוצר לדוגמה נטען אוטומטית. עכשיו לחץ על השדות בצד שמאל ואז על האלמנטים בתוך הדף.");
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Could not auto-load a product page. Paste one product URL manually."
+          : "לא הצלחנו לזהות דף מוצר אוטומטית. אפשר להזין URL ידני למוצר."
       );
     } finally {
       setLoadingPreview(false);
     }
   };
 
-  const loadPreview = async () => {
+  const loadManualPreview = async () => {
+    if (!productUrl.trim()) return;
     setLoadingPreview(true);
     setError(null);
     setSuccess(null);
@@ -178,109 +278,219 @@ export function OnboardingAssistTrainer({
       if (payload.normalizedUrl) {
         setProductUrl(String(payload.normalizedUrl));
       }
-      setSuccess("Preview loaded. Choose a field and click the element inside the page.");
+      setSuccess("הדף נטען. המשך לבחור שדות וללחוץ על האלמנטים המתאימים.");
     } catch (err) {
       setPreviewHtml("");
       setPreviewBaseUrl("");
-      setError(err instanceof Error ? err.message : "Failed loading preview");
+      setError(err instanceof Error ? err.message : "שגיאה בטעינת הדף");
     } finally {
       setLoadingPreview(false);
     }
   };
 
-  useEffect(() => {
-    if (!websiteUrl.trim()) return;
-    if (autoTried) return;
-    if (previewHtml) return;
-    setAutoTried(true);
-    void loadAutoPreview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [websiteUrl, autoTried, previewHtml]);
+  const addCustomField = () => {
+    const label = String(newCustomLabel || "").trim();
+    if (!label) return;
+    const key = toFieldKey(label);
+    if (!key) return;
 
-  const saveTemplate = async () => {
-    if (!canSave) return;
-    setSaving(true);
+    setFields((prev) => {
+      if (prev.some((item) => item.key === key)) return prev;
+      return [...prev, { key, label, mode: "text", isCustom: true }];
+    });
+    setNewCustomLabel("");
+    setActiveFieldKey(key);
+  };
+
+  const removeCustomField = (key: string) => {
+    setFields((prev) => prev.filter((item) => item.key !== key));
+    if (activeFieldKey === key) {
+      setActiveFieldKey("name");
+    }
+  };
+
+  const addPresetField = (field: CategoryPresetField) => {
+    setFields((prev) => {
+      if (prev.some((item) => item.key === field.key)) return prev;
+      return [...prev, { key: field.key, label: field.label, mode: "text", isCustom: true }];
+    });
+    setActiveFieldKey(field.key);
+  };
+
+  const buildTemplatePayload = (): GuideTemplatePayload => {
+    const byKey = new Map(fields.map((item) => [item.key, item]));
+    const name = byKey.get("name")?.selector || "";
+
+    const customFields = fields
+      .filter(
+        (item) =>
+          item.isCustom &&
+          !["name", "price", "description", "image", "inStock"].includes(item.key) &&
+          item.selector
+      )
+      .map((item) => ({
+        key: item.key,
+        label: item.label,
+        selector: {
+          selector: String(item.selector || ""),
+          mode: item.mode,
+        },
+      }));
+
+    return {
+      websiteUrl: normalizeHttpUrl(websiteUrl),
+      productUrl: normalizeHttpUrl(productUrl),
+      category,
+      selectors: {
+        name: {
+          selector: name,
+          mode: "text",
+        },
+        price: byKey.get("price")?.selector
+          ? { selector: String(byKey.get("price")?.selector || ""), mode: "text" }
+          : undefined,
+        image: byKey.get("image")?.selector
+          ? {
+              selector: String(byKey.get("image")?.selector || ""),
+              mode: byKey.get("image")?.mode === "src" ? "src" : "text",
+            }
+          : undefined,
+        description: byKey.get("description")?.selector
+          ? { selector: String(byKey.get("description")?.selector || ""), mode: "text" }
+          : undefined,
+        inStock: byKey.get("inStock")?.selector
+          ? { selector: String(byKey.get("inStock")?.selector || ""), mode: "text" }
+          : undefined,
+      },
+      customFields,
+    };
+  };
+
+  const checkSample = async () => {
+    if (!canCheckSample) return;
+    setLoadingSample(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const response = await fetch(`${apiUrl}/onboarding/assist/template`, {
+      const payload = buildTemplatePayload();
+      const response = await fetch(`${apiUrl}/onboarding/assist/extract-sample`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          websiteUrl: normalizeHttpUrl(websiteUrl),
-          productUrl: normalizeHttpUrl(productUrl),
-          selectors: {
-            name: selectors.name,
-            price: selectors.price,
-            image: selectors.image,
-            description: selectors.description,
-            inStock: selectors.inStock,
-          },
-        }),
+        body: JSON.stringify(payload),
       });
-      const payload = (await response.json().catch(() => ({}))) as { message?: string; error?: string };
+
+      const sample = (await response.json().catch(() => ({}))) as AssistExtractSampleResponse & {
+        error?: string;
+        message?: string;
+      };
+
       if (!response.ok) {
-        throw new Error(payload.message || payload.error || `Error ${response.status}`);
+        throw new Error(sample.message || sample.error || `Error ${response.status}`);
       }
 
-      setSuccess("Saved. The next onboarding run will use your selectors as guided scraping hints.");
-      onTemplateSaved?.();
+      onSampleReady({
+        templatePayload: payload,
+        sampleResult: sample,
+        capturedCount,
+        requiredCount,
+      });
+      setSuccess("מצוין, קיבלנו דוגמת מוצר. אפשר לאשר ולהתחיל אינדוקס.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed saving template");
+      setError(err instanceof Error ? err.message : "שגיאה בבדיקת דוגמת המוצר");
     } finally {
-      setSaving(false);
+      setLoadingSample(false);
     }
   };
 
   return (
     <section className="rounded-2xl border border-geffen-100 bg-geffen-50/40 p-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-          Guided Scraper Setup
-        </p>
-        <p className="mt-1 text-sm text-slate-600">
-          Open one real product page, then click the exact elements so the scraper learns your store structure.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+            הדרכת סקרייפר
+          </p>
+          <p className="mt-1 text-sm text-slate-600">
+            לחץ על שם, מחיר, תיאור, תמונה (ושדות נוספים שתרצה) כדי ללמד את הסקרייפר איך האתר שלך בנוי.
+          </p>
+        </div>
+        <div className="rounded-full border border-geffen-200 bg-white px-3 py-1 text-xs font-semibold text-geffen-700">
+          {capturedRequiredCount}/{requiredCount} חובה
+        </div>
       </div>
+
       <div className="mt-4 space-y-4">
         <label className="block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-            Sample Product URL
+            URL של דף מוצר לדוגמה
           </span>
           <div className="flex flex-col gap-2 md:flex-row">
             <input
               value={productUrl}
               onChange={(e) => setProductUrl(e.target.value)}
-              placeholder="https://your-store.com/products/example"
+              placeholder={`למשל: ${normalizeDomainExample(websiteUrl)}`}
               className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
             />
-            <a
-              href={productUrl.trim() ? normalizeHttpUrl(productUrl) : undefined}
-              target="_blank"
-              rel="noreferrer"
-              className={`inline-flex h-11 items-center justify-center rounded-xl border px-4 text-sm font-semibold ${
-                productUrl.trim()
-                  ? "border-geffen-300 bg-white text-geffen-700 hover:border-geffen-500"
-                  : "pointer-events-none border-geffen-100 bg-geffen-50 text-geffen-400"
-              }`}
-            >
-              Open product page
-            </a>
             <button
               type="button"
               onClick={() => {
-                void loadPreview();
+                void loadManualPreview();
               }}
               disabled={loadingPreview || !productUrl.trim()}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-4 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
             >
-              {loadingPreview ? "Loading..." : "Load This Product"}
+              {loadingPreview ? "טוען..." : "טען דף זה"}
             </button>
           </div>
         </label>
+
+        <div className="rounded-xl border border-geffen-100 bg-white p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+            שדות מהירים לפי קטגוריה
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {presetFields.length === 0 && (
+              <span className="text-xs text-slate-500">אין שדות ברירת מחדל לקטגוריה זו.</span>
+            )}
+            {presetFields.map((field) => {
+              const exists = fields.some((item) => item.key === field.key);
+              return (
+                <button
+                  key={field.key}
+                  type="button"
+                  onClick={() => addPresetField(field)}
+                  disabled={exists}
+                  className="rounded-full border border-geffen-200 bg-geffen-50 px-3 py-1 text-xs text-geffen-800 hover:border-geffen-400 disabled:opacity-40"
+                >
+                  {exists ? "✓ " : "+ "}
+                  {field.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-geffen-100 bg-white p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">הוסף שדה משלך</p>
+          <div className="flex gap-2">
+            <input
+              value={newCustomLabel}
+              onChange={(e) => setNewCustomLabel(e.target.value)}
+              placeholder="לדוגמה: ארומה / סוג עץ / זמן יישון"
+              className="h-10 w-full rounded-lg border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
+            />
+            <button
+              type="button"
+              onClick={addCustomField}
+              disabled={!newCustomLabel.trim()}
+              className="h-10 rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+            >
+              + הוסף
+            </button>
+          </div>
+        </div>
 
         {error && (
           <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -295,38 +505,58 @@ export function OnboardingAssistTrainer({
         )}
 
         {previewHtml && (
-          <div className="grid gap-4 lg:grid-cols-[300px,1fr]">
+          <div className="grid gap-4 lg:grid-cols-[320px,1fr]">
             <div className="space-y-3 rounded-xl border border-geffen-100 bg-white p-3">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                Click The Right Elements
+                Checklist
               </p>
               <p className="text-xs text-slate-500">
-                Select a field, then click it inside the preview.
+                בחר שדה ואז לחץ עליו בתוך הדף. אפשר תמיד לחזור וללחוץ מחדש על שדה כדי לשפר דיוק.
               </p>
-              <div className="space-y-2">
-                {FIELD_CONFIG.map((field) => {
-                  const selected = selectors[field.key];
+
+              <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
+                {fields.map((field) => {
+                  const captured = Boolean(field.selector);
                   return (
                     <button
                       key={field.key}
                       type="button"
-                      onClick={() => setActiveField(field.key)}
+                      onClick={() => setActiveFieldKey(field.key)}
                       className={`w-full rounded-lg border px-3 py-2 text-left text-xs ${
-                        activeField === field.key
+                        activeFieldKey === field.key
                           ? "border-geffen-500 bg-geffen-50 text-geffen-800"
                           : "border-geffen-100 bg-white text-slate-700 hover:border-geffen-300"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span>
-                          {field.label} {field.required ? "*" : ""}
+                          {field.label}
+                          {field.required ? " *" : ""}
                         </span>
                         <span className="text-[10px] uppercase tracking-[0.08em]">
-                          {selected?.selector ? "captured" : "pending"}
+                          {captured ? "captured" : "pending"}
                         </span>
                       </div>
-                      {selected?.selector && (
-                        <p className="mt-1 truncate text-[11px] text-slate-500">{selected.selector}</p>
+                      {field.selector && (
+                        <p className="mt-1 truncate text-[11px] text-slate-500">{field.selector}</p>
+                      )}
+                      {field.sampleText && (
+                        <p className="mt-1 truncate text-[11px] text-slate-400">{field.sampleText}</p>
+                      )}
+
+                      {field.isCustom && (
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeCustomField(field.key);
+                            }}
+                            className="rounded-md border border-red-200 px-2 py-1 text-[10px] text-red-700 hover:bg-red-50"
+                          >
+                            הסר שדה
+                          </button>
+                        </div>
                       )}
                     </button>
                   );
@@ -336,12 +566,12 @@ export function OnboardingAssistTrainer({
               <button
                 type="button"
                 onClick={() => {
-                  void saveTemplate();
+                  void checkSample();
                 }}
-                disabled={!canSave || saving}
+                disabled={!canCheckSample || loadingSample}
                 className="h-10 w-full rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
               >
-                {saving ? "Saving..." : "Save Guidance Template"}
+                {loadingSample ? "בודק דוגמת מוצר..." : "בדוק דוגמת מוצר"}
               </button>
             </div>
 
@@ -349,7 +579,7 @@ export function OnboardingAssistTrainer({
               <iframe
                 title="Product page preview"
                 srcDoc={srcDoc}
-                className="h-[620px] w-full rounded-lg border border-geffen-100"
+                className="h-[660px] w-full rounded-lg border border-geffen-100"
                 sandbox="allow-scripts allow-same-origin allow-forms"
               />
             </div>
@@ -456,4 +686,29 @@ function normalizeHttpUrl(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return raw;
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function toFieldKey(label: string): string {
+  const normalized = String(label || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  if (!normalized) return "";
+  const ascii = normalized.replace(/[^a-zA-Z0-9_:-]/g, "");
+  return (ascii || `field_${Math.random().toString(36).slice(2, 8)}`).slice(0, 80);
+}
+
+function normalizeDomainExample(websiteUrl: string): string {
+  const raw = normalizeHttpUrl(websiteUrl);
+  if (!raw) return "https://example.com/products/sample";
+  try {
+    const url = new URL(raw);
+    return `${url.origin}/products/sample-item`;
+  } catch {
+    return "https://example.com/products/sample-item";
+  }
 }

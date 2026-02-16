@@ -331,6 +331,76 @@ export interface OnboardingDemoSearchResult {
   };
 }
 
+export interface OnboardingAssistSelector {
+  selector: string;
+  mode: "text" | "src";
+}
+
+export interface OnboardingAssistCustomField {
+  key: string;
+  label: string;
+  selector: OnboardingAssistSelector;
+}
+
+export interface OnboardingAssistTemplatePayload {
+  websiteUrl: string;
+  productUrl: string;
+  category?: OnboardingCategory;
+  selectors: {
+    name: OnboardingAssistSelector;
+    price?: OnboardingAssistSelector;
+    image?: OnboardingAssistSelector;
+    description?: OnboardingAssistSelector;
+    inStock?: OnboardingAssistSelector;
+  };
+  customFields?: OnboardingAssistCustomField[];
+}
+
+export interface OnboardingAssistRuntimeTemplate {
+  domain: string;
+  websiteUrl: string;
+  sampleProductUrl: string;
+  category?: OnboardingCategory;
+  selectors: {
+    name: OnboardingAssistSelector;
+    price?: OnboardingAssistSelector;
+    image?: OnboardingAssistSelector;
+    description?: OnboardingAssistSelector;
+    inStock?: OnboardingAssistSelector;
+  };
+  customFields: OnboardingAssistCustomField[];
+}
+
+export interface OnboardingSampleProduct {
+  name?: string;
+  price?: number;
+  currency?: string;
+  imageUrl?: string;
+  description?: string;
+  inStock?: boolean;
+  attributes: Record<string, string>;
+}
+
+export interface OnboardingAssistExtractSampleResult {
+  sampleProduct: OnboardingSampleProduct;
+  missingFields: string[];
+}
+
+export interface OnboardingJobCounters {
+  extracted: number;
+  normalized: number;
+  embedded: number;
+  indexed: number;
+}
+
+export interface OnboardingJobLiveResponse {
+  jobId: string;
+  status: OnboardingJobStatus;
+  progress: OnboardingJobProgress;
+  counters: OnboardingJobCounters;
+  recentProducts: OnboardingIndexedProduct[];
+}
+
 // ============================================================================
 // Environment Configuration
 // ============================================================================
