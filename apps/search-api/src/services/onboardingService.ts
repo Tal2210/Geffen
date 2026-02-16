@@ -989,37 +989,69 @@ export class OnboardingService {
 
   private async ensureIndexes(): Promise<void> {
     await Promise.all([
-      this.jobs.createIndex({ status: 1, createdAt: 1 }),
-      this.jobs.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-      this.jobs.createIndex({ websiteUrl: 1 }),
-      this.jobs.createIndex({ email: 1 }),
-      this.jobs.createIndex({ jobId: 1 }, { unique: true }),
+      this.createIndexSafe(this.jobs, { status: 1, createdAt: 1 }),
+      this.createIndexSafe(this.jobs, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(this.jobs, { websiteUrl: 1 }),
+      this.createIndexSafe(this.jobs, { email: 1 }),
+      this.createIndexSafe(this.jobs, { jobId: 1 }, { unique: true }),
 
-      this.products.createIndex({ demoId: 1 }),
-      this.products.createIndex({ jobId: 1 }),
-      this.products.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-      this.products.createIndex({
-        name: "text",
-        description: "text",
-        brand: "text",
-        attributesText: "text",
-      }),
+      this.createIndexSafe(this.products, { demoId: 1 }),
+      this.createIndexSafe(this.products, { jobId: 1 }),
+      this.createIndexSafe(this.products, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(
+        this.products,
+        {
+          name: "text",
+          description: "text",
+          brand: "text",
+          attributesText: "text",
+        },
+        undefined,
+        { ignoreTextIndexConflict: true }
+      ),
 
-      this.demos.createIndex({ tokenHash: 1 }, { unique: true }),
-      this.demos.createIndex({ demoId: 1 }, { unique: true }),
-      this.demos.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(this.demos, { tokenHash: 1 }, { unique: true }),
+      this.createIndexSafe(this.demos, { demoId: 1 }, { unique: true }),
+      this.createIndexSafe(this.demos, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
 
-      this.track.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-      this.track.createIndex({ event: 1, createdAt: -1 }),
+      this.createIndexSafe(this.track, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(this.track, { event: 1, createdAt: -1 }),
 
-      this.templates.createIndex({ domain: 1 }, { unique: true }),
-      this.templates.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(this.templates, { domain: 1 }, { unique: true }),
+      this.createIndexSafe(this.templates, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
 
-      this.jobPreviews.createIndex({ jobId: 1 }, { unique: true }),
-      this.jobPreviews.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      this.createIndexSafe(this.jobPreviews, { jobId: 1 }, { unique: true }),
+      this.createIndexSafe(this.jobPreviews, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
 
     await this.ensureVectorIndexBestEffort();
+  }
+
+  private async createIndexSafe(
+    collection: Collection<any>,
+    keys: Record<string, 1 | -1 | "text">,
+    options?: Record<string, unknown>,
+    flags?: { ignoreTextIndexConflict?: boolean }
+  ): Promise<void> {
+    try {
+      await collection.createIndex(keys as any, options as any);
+    } catch (error) {
+      const code = Number((error as any)?.code || 0);
+      const codeName = String((error as any)?.codeName || "");
+      const message = String((error as any)?.message || "");
+      const isTextConflict =
+        code === 85 ||
+        codeName === "IndexOptionsConflict" ||
+        message.includes("An equivalent index already exists");
+
+      if (flags?.ignoreTextIndexConflict && isTextConflict) {
+        console.warn(
+          `[onboarding] Reusing existing text index on ${collection.collectionName}: ${codeName || code}`
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   private async ensureVectorIndexBestEffort(): Promise<void> {
