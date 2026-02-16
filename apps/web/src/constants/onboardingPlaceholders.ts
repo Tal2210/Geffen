@@ -1,109 +1,109 @@
 const DEFAULT_PLACEHOLDERS = [
-  "מוצר מומלץ במחיר טוב עם משלוח מהיר",
-  "דגם פופולרי עם ביקורות חזקות",
-  "משהו שמתאים לשימוש יומיומי",
+  "Best value item with fast shipping",
+  "Top-rated product customers love",
+  "Everyday essential with strong reviews",
 ];
 
 const PLACEHOLDERS_BY_CATEGORY: Record<string, string[]> = {
   wine: [
-    "יין אדום ישראלי כשר עד 120 ש\"ח",
-    "שרדונה רענן לארוחת דגים",
-    "יין יבש עם גוף בינוני לפסטה",
+    "Kosher Israeli red wine up to 120 ILS",
+    "Crisp Chardonnay for a fish dinner",
+    "Dry medium-bodied wine for pasta",
   ],
   fashion: [
-    "שמלה שחורה אלגנטית לאירוע ערב",
-    "חולצה לבנה אוברסייז לקיץ",
-    "לוק מינימליסטי לעבודה יומיומית",
+    "Elegant black dress for an evening event",
+    "Oversized white shirt for summer",
+    "Minimal everyday work outfit",
   ],
   footwear: [
-    "סניקרס לבנות נוחות ליומיום",
-    "נעלי ריצה קלות עם תמיכה",
-    "נעליים אלגנטיות לאירוע ערב",
+    "Comfortable white sneakers for everyday wear",
+    "Lightweight running shoes with support",
+    "Elegant shoes for evening events",
   ],
   furniture: [
-    "ספה מודולרית לסלון קטן",
-    "שולחן אוכל עץ טבעי ל-6 סועדים",
-    "כיסא עבודה ארגונומי לתמיכה בגב",
+    "Modular sofa for a small living room",
+    "Natural wood dining table for six",
+    "Ergonomic desk chair with back support",
   ],
   beauty: [
-    "סרום לחות לעור יבש ורגיש",
-    "מייקאפ עמיד למראה טבעי",
-    "שגרת טיפוח מינימלית לבוקר",
+    "Hydrating serum for dry sensitive skin",
+    "Long-lasting makeup with a natural finish",
+    "Minimal morning skincare routine",
   ],
   electronics: [
-    "אוזניות אלחוטיות עם ביטול רעשים",
-    "מסך מחשב 27 אינץ' לעבודה",
-    "טלפון עם מצלמה מעולה וסוללה חזקה",
+    "Wireless headphones with noise cancellation",
+    "27-inch monitor for work setup",
+    "Phone with great camera and battery life",
   ],
   jewelry: [
-    "שרשרת זהב עדינה ליומיום",
-    "עגילים קלאסיים לאירוע",
-    "טבעת מינימליסטית למתנה",
+    "Delicate gold necklace for daily wear",
+    "Classic earrings for an event",
+    "Minimal ring for a gift",
   ],
   home_decor: [
-    "שטיח מודרני לסלון בגוונים בהירים",
-    "מנורת שולחן דקורטיבית לחדר שינה",
-    "אגרטל מינימליסטי למדף בסלון",
+    "Modern rug for a bright living room",
+    "Decorative bedside table lamp",
+    "Minimal vase for a living room shelf",
   ],
   sports: [
-    "מזרן יוגה עבה נגד החלקה",
-    "תיק ספורט קל עם הרבה תאים",
-    "ציוד אימון ביתי למתחילים",
+    "Thick non-slip yoga mat",
+    "Light gym bag with multiple compartments",
+    "Home workout gear for beginners",
   ],
   pets: [
-    "מזון איכותי לכלב קטן רגיש",
-    "צעצוע אינטראקטיבי לחתול אנרגטי",
-    "מיטה אורטופדית לכלב בינוני",
+    "High-quality food for a sensitive small dog",
+    "Interactive toy for an energetic cat",
+    "Orthopedic bed for a medium dog",
   ],
   toys: [
-    "משחק יצירה חינוכי לגיל 6",
-    "לגו מאתגר לילדים סקרנים",
-    "משחק קופסה משפחתי מגבש",
+    "Creative educational toy for age six",
+    "Challenging building set for curious kids",
+    "Family board game for game night",
   ],
   kids: [
-    "בגדי ילדים נוחים לבית ספר",
-    "נעליים קלות לילד פעיל",
-    "תיק איכותי לגן עם הרבה מקום",
+    "Comfortable kids clothes for school",
+    "Light shoes for an active child",
+    "Roomy quality backpack for kindergarten",
   ],
   food: [
-    "מארז גורמה לאירוח ביתי",
-    "חטיפים בריאים ללא תוספת סוכר",
-    "מוצרים טבעוניים לבישול מהיר",
+    "Gourmet bundle for home hosting",
+    "Healthy snacks with no added sugar",
+    "Vegan products for quick cooking",
   ],
   supplements: [
-    "תוסף מגנזיום לשגרת ערב רגועה",
-    "אבקת חלבון נקייה לאחר אימון",
-    "ויטמינים יומיים לשגרה עמוסה",
+    "Magnesium supplement for evening routine",
+    "Clean protein powder post-workout",
+    "Daily vitamins for a busy schedule",
   ],
   books: [
-    "ספר מתח חדש שקשה להניח",
-    "ספר התפתחות אישית פרקטי",
-    "ספר ילדים עם מסר חיובי",
+    "A new thriller you cannot put down",
+    "Practical personal growth book",
+    "Children's book with a positive message",
   ],
   automotive: [
-    "מצלמת דרך איכותית ללילה",
-    "אביזרי ניקוי לרכב במחיר טוב",
-    "מעמד טלפון יציב לרכב",
+    "Night-ready high-quality dash cam",
+    "Value car cleaning accessories",
+    "Stable in-car phone mount",
   ],
   garden: [
-    "עציצים לבית עם תחזוקה נמוכה",
-    "כלי גינון בסיסיים למתחילים",
-    "פתרון השקיה חכם למרפסת",
+    "Low-maintenance indoor plants",
+    "Basic gardening tools for beginners",
+    "Smart watering setup for a balcony",
   ],
   travel: [
-    "מזוודה קלה לנסיעת סוף שבוע",
-    "תיק גב נוח לטרקים קצרים",
-    "אביזרי טיסה שחוסכים מקום",
+    "Light suitcase for a weekend trip",
+    "Comfortable backpack for short hikes",
+    "Space-saving travel accessories",
   ],
   bags: [
-    "תיק גב מעוצב ללפטופ 15 אינץ'",
-    "תיק צד אלגנטי לערב",
-    "תיק יומי קל ונוח לעבודה",
+    "Stylish backpack for a 15-inch laptop",
+    "Elegant shoulder bag for evenings",
+    "Light everyday work bag",
   ],
   lingerie: [
-    "סט נוח ועדין ליומיום",
-    "חזייה תומכת ללא ברזל",
-    "בגד גוף אלגנטי לשכבות",
+    "Soft comfortable daily set",
+    "Supportive wire-free bra",
+    "Elegant bodysuit for layering",
   ],
 };
 
@@ -114,7 +114,7 @@ export function getCategoryPlaceholders(category?: string): string[] {
 }
 
 function categoryDisplayName(category?: string): string {
-  if (!category) return "החנות שלך";
+  if (!category) return "your store";
   const key = String(category || "").trim();
   return key.replace(/_/g, " ");
 }
@@ -127,7 +127,7 @@ export function buildDemoCatchphrase(params: {
   const { domain, category, productCount } = params;
   const categoryText = categoryDisplayName(category);
   if (typeof productCount === "number" && productCount > 0) {
-    return `הדמו שלך ל-${domain} מוכן: מצאנו ${productCount} מוצרים בקטגוריית ${categoryText} ופתחנו חיפוש שמבין שפה טבעית.`;
+    return `Your demo for ${domain} is ready: we found ${productCount} products in ${categoryText} and enabled natural-language search.`;
   }
-  return `הדמו שלך ל-${domain} מוכן: פתחנו חיפוש שמבין שפה טבעית ומציג מוצרים רלוונטיים בזמן אמת.`;
+  return `Your demo for ${domain} is ready: natural-language search is active and ready to explore products in real time.`;
 }

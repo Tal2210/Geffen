@@ -32,109 +32,109 @@ const CATEGORY_PRESET_FIELDS: Record<
   Array<{ key: string; label: string }>
 > = {
   fashion: [
-    { key: "material", label: "חומר" },
-    { key: "color", label: "צבע" },
-    { key: "size", label: "מידה" },
-    { key: "fit", label: "גזרה" },
+    { key: "material", label: "Material" },
+    { key: "color", label: "Color" },
+    { key: "size", label: "Size" },
+    { key: "fit", label: "Fit" },
   ],
   footwear: [
-    { key: "size", label: "מידה" },
-    { key: "material", label: "חומר" },
-    { key: "sole", label: "סוליה" },
+    { key: "size", label: "Size" },
+    { key: "material", label: "Material" },
+    { key: "sole", label: "Sole" },
   ],
   wine: [
-    { key: "country", label: "מוצא" },
-    { key: "grape", label: "זן ענבים" },
-    { key: "volume", label: "נפח" },
-    { key: "alcohol", label: "אחוז אלכוהול" },
-    { key: "kosher", label: "כשרות" },
-    { key: "winery", label: "יקב" },
-    { key: "vintage", label: "בציר" },
+    { key: "country", label: "Country" },
+    { key: "grape", label: "Grape Variety" },
+    { key: "volume", label: "Bottle Size" },
+    { key: "alcohol", label: "Alcohol %" },
+    { key: "kosher", label: "Kosher" },
+    { key: "winery", label: "Winery" },
+    { key: "vintage", label: "Vintage" },
   ],
   furniture: [
-    { key: "material", label: "חומר" },
-    { key: "dimensions", label: "מידות" },
-    { key: "color", label: "צבע" },
+    { key: "material", label: "Material" },
+    { key: "dimensions", label: "Dimensions" },
+    { key: "color", label: "Color" },
   ],
   beauty: [
-    { key: "skin_type", label: "סוג עור" },
-    { key: "volume", label: "נפח" },
-    { key: "usage", label: "שימוש" },
+    { key: "skin_type", label: "Skin Type" },
+    { key: "volume", label: "Volume" },
+    { key: "usage", label: "Usage" },
   ],
   electronics: [
-    { key: "brand_model", label: "דגם" },
-    { key: "storage", label: "נפח אחסון" },
-    { key: "connectivity", label: "קישוריות" },
+    { key: "brand_model", label: "Model" },
+    { key: "storage", label: "Storage" },
+    { key: "connectivity", label: "Connectivity" },
   ],
   jewelry: [
-    { key: "material", label: "חומר" },
-    { key: "stone", label: "אבן" },
-    { key: "size", label: "מידה" },
+    { key: "material", label: "Material" },
+    { key: "stone", label: "Stone" },
+    { key: "size", label: "Size" },
   ],
   home_decor: [
-    { key: "material", label: "חומר" },
-    { key: "dimensions", label: "מידות" },
-    { key: "color", label: "צבע" },
+    { key: "material", label: "Material" },
+    { key: "dimensions", label: "Dimensions" },
+    { key: "color", label: "Color" },
   ],
   sports: [
-    { key: "sport_type", label: "סוג ספורט" },
-    { key: "size", label: "מידה" },
-    { key: "material", label: "חומר" },
+    { key: "sport_type", label: "Sport Type" },
+    { key: "size", label: "Size" },
+    { key: "material", label: "Material" },
   ],
   pets: [
-    { key: "pet_type", label: "סוג חיה" },
-    { key: "weight_range", label: "טווח משקל" },
-    { key: "volume", label: "נפח" },
+    { key: "pet_type", label: "Pet Type" },
+    { key: "weight_range", label: "Weight Range" },
+    { key: "volume", label: "Volume" },
   ],
   toys: [
-    { key: "age", label: "גיל מומלץ" },
-    { key: "material", label: "חומר" },
-    { key: "brand", label: "מותג" },
+    { key: "age", label: "Recommended Age" },
+    { key: "material", label: "Material" },
+    { key: "brand", label: "Brand" },
   ],
   kids: [
-    { key: "age", label: "גיל" },
-    { key: "size", label: "מידה" },
-    { key: "material", label: "חומר" },
+    { key: "age", label: "Age" },
+    { key: "size", label: "Size" },
+    { key: "material", label: "Material" },
   ],
   food: [
-    { key: "weight", label: "משקל" },
-    { key: "origin", label: "מקור" },
-    { key: "kosher", label: "כשרות" },
+    { key: "weight", label: "Weight" },
+    { key: "origin", label: "Origin" },
+    { key: "kosher", label: "Kosher" },
   ],
   supplements: [
-    { key: "dosage", label: "מינון" },
-    { key: "servings", label: "מנות" },
-    { key: "ingredients", label: "רכיבים" },
+    { key: "dosage", label: "Dosage" },
+    { key: "servings", label: "Servings" },
+    { key: "ingredients", label: "Ingredients" },
   ],
   books: [
-    { key: "author", label: "מחבר" },
-    { key: "language", label: "שפה" },
-    { key: "publisher", label: "הוצאה" },
+    { key: "author", label: "Author" },
+    { key: "language", label: "Language" },
+    { key: "publisher", label: "Publisher" },
   ],
   automotive: [
-    { key: "compatibility", label: "תאימות" },
-    { key: "brand", label: "מותג" },
-    { key: "warranty", label: "אחריות" },
+    { key: "compatibility", label: "Compatibility" },
+    { key: "brand", label: "Brand" },
+    { key: "warranty", label: "Warranty" },
   ],
   garden: [
-    { key: "dimensions", label: "מידות" },
-    { key: "material", label: "חומר" },
-    { key: "outdoor_use", label: "שימוש חוץ" },
+    { key: "dimensions", label: "Dimensions" },
+    { key: "material", label: "Material" },
+    { key: "outdoor_use", label: "Outdoor Use" },
   ],
   travel: [
-    { key: "capacity", label: "קיבולת" },
-    { key: "dimensions", label: "מידות" },
-    { key: "weight", label: "משקל" },
+    { key: "capacity", label: "Capacity" },
+    { key: "dimensions", label: "Dimensions" },
+    { key: "weight", label: "Weight" },
   ],
   bags: [
-    { key: "material", label: "חומר" },
-    { key: "capacity", label: "קיבולת" },
-    { key: "dimensions", label: "מידות" },
+    { key: "material", label: "Material" },
+    { key: "capacity", label: "Capacity" },
+    { key: "dimensions", label: "Dimensions" },
   ],
   lingerie: [
-    { key: "size", label: "מידה" },
-    { key: "material", label: "חומר" },
-    { key: "support", label: "תמיכה" },
+    { key: "size", label: "Size" },
+    { key: "material", label: "Material" },
+    { key: "support", label: "Support" },
   ],
 };
 
@@ -928,6 +928,11 @@ export class ScraperOrchestratorService {
 
   private looksLikeProductUrl(url: string): boolean {
     const value = String(url || "").toLowerCase();
+    if (!value) return false;
+    if (value.endsWith(".xml")) return false;
+    if (/\/sitemap[^/]*\.xml(?:$|\?)/.test(value)) return false;
+    if (/\/(feed|rss)(?:$|[/?#])/.test(value)) return false;
+    if (/[?&](format|output)=xml\b/.test(value)) return false;
     return /\/(product|products|item|items|shop|wine|wines|sku|p)\b/.test(value);
   }
 

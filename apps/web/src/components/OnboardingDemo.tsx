@@ -70,11 +70,11 @@ function toPlainText(value?: string): string {
 
 function safeHostname(rawUrl?: string): string {
   const input = String(rawUrl || "").trim();
-  if (!input) return "החנות שלך";
+  if (!input) return "your-store.com";
   try {
     return new URL(input).hostname;
   } catch {
-    return "החנות שלך";
+    return "your-store.com";
   }
 }
 
@@ -187,7 +187,7 @@ export function OnboardingDemo() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="max-w-3xl">
               <p className="text-xs uppercase tracking-[0.15em] text-geffen-700">Semantic Demo</p>
-              <h1 className="mt-1 text-3xl font-semibold text-slate-900">הדמו של {domain}</h1>
+              <h1 className="mt-1 text-3xl font-semibold text-slate-900">Demo for {domain}</h1>
               <p className="mt-2 text-sm text-slate-600">{catchphrase}</p>
             </div>
 
@@ -196,7 +196,7 @@ export function OnboardingDemo() {
                 to="/onboarding"
                 className="rounded-full border border-geffen-200 bg-white px-4 py-2 text-xs font-semibold text-geffen-700 hover:border-geffen-400"
               >
-                דמו חדש
+                New Demo
               </Link>
             </div>
           </div>

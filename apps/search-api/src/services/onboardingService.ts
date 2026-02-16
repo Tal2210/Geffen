@@ -964,6 +964,11 @@ export class OnboardingService {
 
   private looksLikeProductUrl(url: string): boolean {
     const value = String(url || "").toLowerCase();
+    if (!value) return false;
+    if (value.endsWith(".xml")) return false;
+    if (/\/sitemap[^/]*\.xml(?:$|\?)/.test(value)) return false;
+    if (/\/(feed|rss)(?:$|[/?#])/.test(value)) return false;
+    if (/[?&](format|output)=xml\b/.test(value)) return false;
     return (
       /\/(product|products|item|items|sku|p)\b/.test(value) ||
       /\/collections\/[^/]+\/products\//.test(value)

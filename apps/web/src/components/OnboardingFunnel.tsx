@@ -118,6 +118,18 @@ function toPlainText(value?: string): string {
 }
 
 const STEP_ORDER = ["discover", "extract", "normalize", "sample", "embed", "index", "finalize", "done"];
+const STEP_LABELS: Record<string, string> = {
+  discover: "Connecting to your store",
+  extract: "Finding products",
+  normalize: "Cleaning product data",
+  sample: "Selecting best products",
+  embed: "Preparing smart search",
+  index: "Publishing your demo catalog",
+  finalize: "Finalizing demo link",
+  done: "Done",
+  queued: "Queued",
+  running: "Building your demo",
+};
 
 export function OnboardingFunnel() {
   const navigate = useNavigate();
@@ -209,15 +221,15 @@ export function OnboardingFunnel() {
   const goToGuide = () => {
     const normalizedWebsite = normalizeHttpUrl(websiteUrl);
     if (!isPublicWebsiteUrl(normalizedWebsite)) {
-      setError("יש להזין URL ציבורי תקין (http/https).");
+      setError("Please enter a valid public website URL (http/https).");
       return;
     }
     if (!isValidEmail(email)) {
-      setError("יש להזין אימייל תקין.");
+      setError("Please enter a valid email.");
       return;
     }
     if (!category) {
-      setError("יש לבחור קטגוריה.");
+      setError("Please choose a category.");
       return;
     }
     setError(null);
@@ -275,7 +287,7 @@ export function OnboardingFunnel() {
 
       await startJob();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "שמירת הגדרות הסקרייפר נכשלה");
+      setError(err instanceof Error ? err.message : "Failed to save page setup");
     } finally {
       setSavingTemplate(false);
     }
@@ -315,19 +327,19 @@ export function OnboardingFunnel() {
   return (
     <div className="min-h-screen bg-[#fffdfd] px-6 py-8 text-slate-900 lg:px-10">
       <div className="mx-auto max-w-6xl rounded-3xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
-        <h1 className="mb-2 text-2xl font-semibold text-slate-900">צור דמו סמנטי לחנות שלך</h1>
+        <h1 className="mb-2 text-2xl font-semibold text-slate-900">Create your store demo</h1>
         <p className="mb-6 text-sm text-slate-500">
-          אונבורדינג אינטראקטיבי: פרטי חנות → הדרכת סקרייפר → אישור דוגמת מוצר → טעינה חיה של אינדוקס.
+          Simple setup: store details, map one product page, review a sample, and launch your live demo.
         </p>
 
         <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-4">
-          <StepBadge active={step === "details"} done={step !== "details"} label="1. פרטי חנות" />
-          <StepBadge active={step === "guide"} done={["preview-confirm", "indexing-live"].includes(step)} label="2. הדרכת סקרייפר" />
-          <StepBadge active={step === "preview-confirm"} done={step === "indexing-live"} label="3. אישור דוגמה" />
+          <StepBadge active={step === "details"} done={step !== "details"} label="1. Store details" />
+          <StepBadge active={step === "guide"} done={["preview-confirm", "indexing-live"].includes(step)} label="2. Map fields" />
+          <StepBadge active={step === "preview-confirm"} done={step === "indexing-live"} label="3. Review sample" />
           <StepBadge
             active={step === "indexing-live"}
             done={Boolean(job && ["ready", "partial_ready"].includes(job.status))}
-            label="4. טעינה ואינדוקס"
+            label="4. Build demo"
           />
         </div>
 
@@ -341,7 +353,7 @@ export function OnboardingFunnel() {
           <div className="space-y-4">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                אתר החנות
+                Website URL
               </span>
               <input
                 value={websiteUrl}
@@ -349,12 +361,12 @@ export function OnboardingFunnel() {
                 placeholder="https://your-store.com"
                 className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
               />
-              <p className="mt-1 text-xs text-slate-500">הכנס כתובת אתר ציבורי של החנות (לא עמוד אדמין).</p>
+              <p className="mt-1 text-xs text-slate-500">Use your public storefront URL (not admin pages).</p>
             </label>
 
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                אימייל
+                Email
               </span>
               <input
                 value={email}
@@ -366,7 +378,7 @@ export function OnboardingFunnel() {
 
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                קטגוריית החנות
+                Store Category
               </span>
               <select
                 value={category}
@@ -388,7 +400,7 @@ export function OnboardingFunnel() {
               disabled={!detailsValid}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-6 text-sm font-semibold text-white transition hover:bg-geffen-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              המשך להדרכת סקרייפר
+              Continue
             </button>
           </div>
         )}
@@ -411,7 +423,7 @@ export function OnboardingFunnel() {
                 onClick={() => setStep("details")}
                 className="h-11 rounded-xl border border-geffen-200 bg-white px-5 text-sm font-semibold text-geffen-700 hover:border-geffen-400"
               >
-                חזור לפרטים
+                Back
               </button>
             </div>
           </div>
@@ -420,9 +432,9 @@ export function OnboardingFunnel() {
         {step === "preview-confirm" && sampleCheck && (
           <div className="space-y-4">
             <div className="rounded-xl border border-geffen-100 bg-geffen-50/60 p-4">
-              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">דוגמת מוצר לפני אינדוקס</p>
+              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Sample Product Preview</p>
               <p className="mt-1 text-sm text-slate-600">
-                זה המוצר שחולץ לפי הבחירות שלך. אם הכול נראה תקין, נתחיל scraping + indexing מלא.
+                This is a sample product generated from your field mapping. If it looks good, continue to build the demo.
               </p>
             </div>
 
@@ -468,7 +480,8 @@ export function OnboardingFunnel() {
 
                   {sampleCheck.sampleResult.missingFields.length > 0 && (
                     <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      חסרים שדות: {sampleCheck.sampleResult.missingFields.join(", ")}.
+                      Some fields are missing: {sampleCheck.sampleResult.missingFields.join(", ")}.
+                      You can still continue.
                     </div>
                   )}
                 </div>
@@ -481,17 +494,17 @@ export function OnboardingFunnel() {
                 onClick={() => setStep("guide")}
                 className="h-11 rounded-xl border border-geffen-200 bg-white px-5 text-sm font-semibold text-geffen-700 hover:border-geffen-400"
               >
-                חזור לעריכה
+                Back to edit
               </button>
               <button
                 type="button"
                 onClick={() => {
                   void confirmAndStart();
                 }}
-                disabled={starting || savingTemplate || sampleCheck.sampleResult.missingFields.length > 0}
+                disabled={starting || savingTemplate}
                 className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
               >
-                {starting || savingTemplate ? "מתחיל..." : "נראה טוב, תתחיל אינדוקס"}
+                {starting || savingTemplate ? "Starting..." : "Looks good, build demo"}
               </button>
             </div>
           </div>
@@ -500,9 +513,13 @@ export function OnboardingFunnel() {
         {step === "indexing-live" && (
           <div className="space-y-5">
             <div className="rounded-xl border border-geffen-100 bg-geffen-50/50 p-4">
-              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">סטטוס נוכחי</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{job?.status || live?.status || "queued"}</p>
-              <p className="mt-1 text-sm text-slate-600">{job?.progress?.message || live?.progress?.message || "עובדים..."}</p>
+              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Current Status</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">
+                {readableStatus(job?.status || live?.status || "queued")}
+              </p>
+              <p className="mt-1 text-sm text-slate-600">
+                {readableStep(job?.progress?.step || live?.progress?.step || "queued")}
+              </p>
             </div>
 
             <div>
@@ -519,14 +536,14 @@ export function OnboardingFunnel() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <LiveMetric label="נסרקו" value={live?.counters?.extracted || 0} />
-              <LiveMetric label="נורמלו" value={live?.counters?.normalized || 0} />
-              <LiveMetric label="אמבדינג" value={live?.counters?.embedded || 0} />
-              <LiveMetric label="אונדקסו" value={live?.counters?.indexed || 0} />
+              <LiveMetric label="Products Found" value={live?.counters?.extracted || 0} />
+              <LiveMetric label="Products Cleaned" value={live?.counters?.normalized || 0} />
+              <LiveMetric label="Search Ready" value={live?.counters?.embedded || 0} />
+              <LiveMetric label="In Demo" value={live?.counters?.indexed || 0} />
             </div>
 
             <section className="rounded-2xl border border-geffen-100 bg-white p-4">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">Pipeline</p>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">Progress Steps</p>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {STEP_ORDER.map((item) => {
                   const isDone = STEP_ORDER.indexOf(item) <= STEP_ORDER.indexOf(currentTimelineStep as any);
@@ -542,7 +559,7 @@ export function OnboardingFunnel() {
                             : "border-geffen-100 bg-white text-slate-500"
                       }`}
                     >
-                      {item}
+                      {readableStep(item)}
                     </div>
                   );
                 })}
@@ -551,12 +568,12 @@ export function OnboardingFunnel() {
 
             <section className="rounded-2xl border border-geffen-100 bg-white p-4">
               <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                מוצרים מתווספים עכשיו
+                Products Added Live
               </p>
 
               {(live?.recentProducts || []).length === 0 ? (
                 <div className="rounded-xl border border-geffen-100 bg-geffen-50/40 p-6 text-center text-sm text-slate-500">
-                  מחכים למוצרים ראשונים...
+                  Waiting for the first products...
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -619,6 +636,20 @@ function LiveMetric({ label, value }: { label: string; value: number }) {
       <p className="mt-1 text-xl font-semibold text-geffen-700">{value}</p>
     </div>
   );
+}
+
+function readableStep(step: string): string {
+  const key = String(step || "").toLowerCase().trim();
+  return STEP_LABELS[key] || "Working on your demo";
+}
+
+function readableStatus(status: string): string {
+  const key = String(status || "").toLowerCase().trim();
+  if (key === "ready") return "Demo ready";
+  if (key === "partial_ready") return "Demo ready (partial catalog)";
+  if (key === "failed") return "Setup failed";
+  if (key === "running") return "Building your demo";
+  return "Queued";
 }
 
 function normalizeHttpUrl(value: string): string {

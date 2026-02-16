@@ -32,6 +32,7 @@ interface FieldItem {
   mode: FieldMode;
   required?: boolean;
   isCustom?: boolean;
+  isPreset?: boolean;
   selector?: string;
   sampleText?: string;
 }
@@ -68,22 +69,22 @@ interface Props {
 
 const FALLBACK_PRESETS: Record<string, CategoryPresetField[]> = {
   wine: [
-    { key: "country", label: "מוצא" },
-    { key: "grape", label: "זן ענבים" },
-    { key: "volume", label: "נפח" },
-    { key: "alcohol", label: "אחוז אלכוהול" },
-    { key: "kosher", label: "כשרות" },
-    { key: "winery", label: "יקב" },
-    { key: "vintage", label: "בציר" },
+    { key: "country", label: "Country" },
+    { key: "grape", label: "Grape Variety" },
+    { key: "volume", label: "Bottle Size" },
+    { key: "alcohol", label: "Alcohol %" },
+    { key: "kosher", label: "Kosher" },
+    { key: "winery", label: "Winery" },
+    { key: "vintage", label: "Vintage" },
   ],
 };
 
 const BASE_FIELDS: FieldItem[] = [
-  { key: "name", label: "שם המוצר", mode: "text", required: true },
-  { key: "price", label: "מחיר", mode: "text", required: true },
-  { key: "description", label: "תיאור", mode: "text", required: true },
-  { key: "image", label: "תמונה", mode: "src", required: true },
-  { key: "inStock", label: "מצב מלאי", mode: "text" },
+  { key: "name", label: "Product Name", mode: "text", required: true },
+  { key: "price", label: "Price", mode: "text" },
+  { key: "description", label: "Description", mode: "text" },
+  { key: "image", label: "Image", mode: "src" },
+  { key: "inStock", label: "Availability", mode: "text" },
 ];
 
 export function OnboardingAssistTrainer({
@@ -129,7 +130,7 @@ export function OnboardingAssistTrainer({
         )
       );
       setError(null);
-      setSuccess("השדה נקלט. אפשר להמשיך לשדה הבא.");
+      setSuccess("Field captured. Continue with the next one.");
     };
 
     window.addEventListener("message", onMessage);
@@ -145,6 +146,7 @@ export function OnboardingAssistTrainer({
     setAutoTried(false);
     setError(null);
     setSuccess(null);
+    setPresetFields([]);
     setFields(BASE_FIELDS);
     setActiveFieldKey("name");
   }, [websiteUrl, category]);
@@ -180,6 +182,25 @@ export function OnboardingAssistTrainer({
   }, [apiUrl, category]);
 
   useEffect(() => {
+    if (!presetFields.length) return;
+    setFields((prev) => {
+      const next = [...prev];
+      for (const field of presetFields) {
+        if (!next.some((item) => item.key === field.key)) {
+          next.push({
+            key: field.key,
+            label: field.label,
+            mode: "text",
+            isCustom: true,
+            isPreset: true,
+          });
+        }
+      }
+      return next;
+    });
+  }, [presetFields]);
+
+  useEffect(() => {
     if (!websiteUrl.trim()) return;
     if (autoTried) return;
     if (previewHtml) return;
@@ -193,18 +214,18 @@ export function OnboardingAssistTrainer({
     [fields]
   );
 
-  const capturedRequiredCount = useMemo(
-    () => fields.filter((item) => item.required && item.selector).length,
-    [fields]
-  );
-
   const capturedCount = useMemo(
     () => fields.filter((item) => item.selector).length,
     [fields]
   );
 
+  const hasNameSelector = useMemo(
+    () => Boolean(fields.find((item) => item.key === "name")?.selector),
+    [fields]
+  );
+
   const canCheckSample =
-    Boolean(productUrl.trim()) && capturedRequiredCount >= requiredCount && !loadingPreview;
+    Boolean(productUrl.trim()) && hasNameSelector && !loadingPreview;
 
   const srcDoc = useMemo(() => {
     if (!previewHtml) return "";
@@ -238,12 +259,12 @@ export function OnboardingAssistTrainer({
       if (payload.normalizedUrl) {
         setProductUrl(String(payload.normalizedUrl));
       }
-      setSuccess("דף מוצר לדוגמה נטען אוטומטית. עכשיו לחץ על השדות בצד שמאל ואז על האלמנטים בתוך הדף.");
+      setSuccess("We found a sample product page automatically. Select a field, then click the matching element in the page preview.");
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "לא הצלחנו לזהות דף מוצר אוטומטית. אפשר להזין URL ידני למוצר."
+          : "Could not detect a product page automatically. You can paste a product URL manually."
       );
     } finally {
       setLoadingPreview(false);
@@ -278,11 +299,11 @@ export function OnboardingAssistTrainer({
       if (payload.normalizedUrl) {
         setProductUrl(String(payload.normalizedUrl));
       }
-      setSuccess("הדף נטען. המשך לבחור שדות וללחוץ על האלמנטים המתאימים.");
+      setSuccess("Preview loaded. Continue selecting fields and clicking matching elements.");
     } catch (err) {
       setPreviewHtml("");
       setPreviewBaseUrl("");
-      setError(err instanceof Error ? err.message : "שגיאה בטעינת הדף");
+      setError(err instanceof Error ? err.message : "Failed to load this product page.");
     } finally {
       setLoadingPreview(false);
     }
@@ -307,14 +328,6 @@ export function OnboardingAssistTrainer({
     if (activeFieldKey === key) {
       setActiveFieldKey("name");
     }
-  };
-
-  const addPresetField = (field: CategoryPresetField) => {
-    setFields((prev) => {
-      if (prev.some((item) => item.key === field.key)) return prev;
-      return [...prev, { key: field.key, label: field.label, mode: "text", isCustom: true }];
-    });
-    setActiveFieldKey(field.key);
   };
 
   const buildTemplatePayload = (): GuideTemplatePayload => {
@@ -401,7 +414,7 @@ export function OnboardingAssistTrainer({
             capturedCount,
             requiredCount,
           });
-          setSuccess("שרת עדיין מתעדכן. ביצענו בדיקת דוגמה מקומית והמשך התהליך פתוח.");
+          setSuccess("Your server is still updating. We ran a local sample check so you can continue now.");
           return;
         }
         throw new Error(message);
@@ -413,9 +426,9 @@ export function OnboardingAssistTrainer({
         capturedCount,
         requiredCount,
       });
-      setSuccess("מצוין, קיבלנו דוגמת מוצר. אפשר לאשר ולהתחיל אינדוקס.");
+      setSuccess("Sample looks good. You can continue to build your demo.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "שגיאה בבדיקת דוגמת המוצר");
+      setError(err instanceof Error ? err.message : "Failed to validate sample product.");
     } finally {
       setLoadingSample(false);
     }
@@ -426,27 +439,27 @@ export function OnboardingAssistTrainer({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-            הדרכת סקרייפר
+            Page Setup
           </p>
           <p className="mt-1 text-sm text-slate-600">
-            לחץ על שם, מחיר, תיאור, תמונה (ושדות נוספים שתרצה) כדי ללמד את הסקרייפר איך האתר שלך בנוי.
+            Pick a field, then click the matching element in the page preview. You can add extra fields any time.
           </p>
         </div>
         <div className="rounded-full border border-geffen-200 bg-white px-3 py-1 text-xs font-semibold text-geffen-700">
-          {capturedRequiredCount}/{requiredCount} חובה
+          {capturedCount} fields selected
         </div>
       </div>
 
       <div className="mt-4 space-y-4">
         <label className="block">
           <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-            URL של דף מוצר לדוגמה
+            Sample Product URL
           </span>
           <div className="flex flex-col gap-2 md:flex-row">
             <input
               value={productUrl}
               onChange={(e) => setProductUrl(e.target.value)}
-              placeholder={`למשל: ${normalizeDomainExample(websiteUrl)}`}
+              placeholder={`For example: ${normalizeDomainExample(websiteUrl)}`}
               className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
             />
             <button
@@ -457,56 +470,10 @@ export function OnboardingAssistTrainer({
               disabled={loadingPreview || !productUrl.trim()}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-4 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
             >
-              {loadingPreview ? "טוען..." : "טען דף זה"}
+              {loadingPreview ? "Loading..." : "Load this page"}
             </button>
           </div>
         </label>
-
-        <div className="rounded-xl border border-geffen-100 bg-white p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-            שדות מהירים לפי קטגוריה
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {presetFields.length === 0 && (
-              <span className="text-xs text-slate-500">אין שדות ברירת מחדל לקטגוריה זו.</span>
-            )}
-            {presetFields.map((field) => {
-              const exists = fields.some((item) => item.key === field.key);
-              return (
-                <button
-                  key={field.key}
-                  type="button"
-                  onClick={() => addPresetField(field)}
-                  disabled={exists}
-                  className="rounded-full border border-geffen-200 bg-geffen-50 px-3 py-1 text-xs text-geffen-800 hover:border-geffen-400 disabled:opacity-40"
-                >
-                  {exists ? "✓ " : "+ "}
-                  {field.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-geffen-100 bg-white p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">הוסף שדה משלך</p>
-          <div className="flex gap-2">
-            <input
-              value={newCustomLabel}
-              onChange={(e) => setNewCustomLabel(e.target.value)}
-              placeholder="לדוגמה: ארומה / סוג עץ / זמן יישון"
-              className="h-10 w-full rounded-lg border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
-            />
-            <button
-              type="button"
-              onClick={addCustomField}
-              disabled={!newCustomLabel.trim()}
-              className="h-10 rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
-            >
-              + הוסף
-            </button>
-          </div>
-        </div>
 
         {error && (
           <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -527,8 +494,29 @@ export function OnboardingAssistTrainer({
                 Checklist
               </p>
               <p className="text-xs text-slate-500">
-                בחר שדה ואז לחץ עליו בתוך הדף. אפשר תמיד לחזור וללחוץ מחדש על שדה כדי לשפר דיוק.
+                Category fields are already included. Select any field, then click its matching element in the preview.
               </p>
+              <div className="rounded-lg border border-geffen-100 bg-geffen-50/40 p-2">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-geffen-700">
+                  Add custom field
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    value={newCustomLabel}
+                    onChange={(e) => setNewCustomLabel(e.target.value)}
+                    placeholder="Example: aroma, finish, wood type"
+                    className="h-9 w-full rounded-md border border-geffen-200 px-2 text-xs outline-none focus:border-geffen-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCustomField}
+                    disabled={!newCustomLabel.trim()}
+                    className="h-9 rounded-md border border-geffen-600 bg-geffen-600 px-3 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
 
               <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
                 {fields.map((field) => {
@@ -550,7 +538,7 @@ export function OnboardingAssistTrainer({
                           {field.required ? " *" : ""}
                         </span>
                         <span className="text-[10px] uppercase tracking-[0.08em]">
-                          {captured ? "captured" : "pending"}
+                          {captured ? "selected" : "pending"}
                         </span>
                       </div>
                       {field.selector && (
@@ -570,7 +558,7 @@ export function OnboardingAssistTrainer({
                             }}
                             className="rounded-md border border-red-200 px-2 py-1 text-[10px] text-red-700 hover:bg-red-50"
                           >
-                            הסר שדה
+                            Remove
                           </button>
                         </div>
                       )}
@@ -587,7 +575,7 @@ export function OnboardingAssistTrainer({
                 disabled={!canCheckSample || loadingSample}
                 className="h-10 w-full rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
               >
-                {loadingSample ? "בודק דוגמת מוצר..." : "בדוק דוגמת מוצר"}
+                {loadingSample ? "Checking sample..." : "Check sample product"}
               </button>
             </div>
 
