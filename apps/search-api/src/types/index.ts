@@ -27,6 +27,65 @@ export const ImageSearchRequestSchema = z.object({
 
 export type ImageSearchRequest = z.infer<typeof ImageSearchRequestSchema>;
 
+export const OnboardingCategoryValues = [
+  "fashion",
+  "footwear",
+  "wine",
+  "furniture",
+  "beauty",
+  "electronics",
+  "jewelry",
+  "home_decor",
+  "sports",
+  "pets",
+  "toys",
+  "kids",
+  "food",
+  "supplements",
+  "books",
+  "automotive",
+  "garden",
+  "travel",
+  "bags",
+  "lingerie",
+] as const;
+
+export const OnboardingCategorySchema = z.enum(OnboardingCategoryValues);
+export type OnboardingCategory = z.infer<typeof OnboardingCategorySchema>;
+
+export const OnboardingStartRequestSchema = z.object({
+  websiteUrl: z.string().url().max(2048),
+  category: OnboardingCategorySchema,
+  email: z.string().email().max(320),
+});
+
+export type OnboardingStartRequest = z.infer<typeof OnboardingStartRequestSchema>;
+
+export const OnboardingDemoSearchRequestSchema = z.object({
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(50).default(24),
+  offset: z.number().int().min(0).default(0),
+});
+
+export type OnboardingDemoSearchRequest = z.infer<typeof OnboardingDemoSearchRequestSchema>;
+
+export const OnboardingTrackEventSchema = z.object({
+  event: z.enum([
+    "start_clicked",
+    "job_polled",
+    "demo_opened",
+    "demo_search",
+    "demo_exit",
+    "error_seen",
+  ]),
+  jobId: z.string().min(1).max(120).optional(),
+  demoId: z.string().min(1).max(120).optional(),
+  websiteUrl: z.string().url().max(2048).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
+});
+
+export type OnboardingTrackEvent = z.infer<typeof OnboardingTrackEventSchema>;
+
 export const DetectedWineSchema = z.object({
   name: z.string().min(1).max(300),
   producer: z.string().max(200).optional(),
@@ -169,6 +228,109 @@ export interface ImageSearchResult {
   };
 }
 
+export type OnboardingJobStatus = "queued" | "running" | "ready" | "partial_ready" | "failed";
+
+export interface OnboardingJobProgress {
+  step:
+    | "queued"
+    | "discover"
+    | "extract"
+    | "normalize"
+    | "sample"
+    | "embed"
+    | "index"
+    | "finalize"
+    | "done"
+    | "failed";
+  percent: number;
+  message?: string;
+}
+
+export interface OnboardingNormalizedProduct {
+  name: string;
+  description?: string;
+  price: number;
+  currency?: string;
+  imageUrl?: string;
+  productUrl: string;
+  brand?: string;
+  category?: string;
+  inStock?: boolean;
+  source: "shopify" | "woocommerce" | "generic_static" | "browser_fallback";
+  raw?: Record<string, unknown>;
+}
+
+export interface OnboardingIndexedProduct extends OnboardingNormalizedProduct {
+  _id: string;
+  jobId: string;
+  demoId: string;
+  merchantId: string;
+  embedding?: number[];
+  score?: number;
+  finalScore?: number;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface OnboardingStartResponse {
+  jobId: string;
+  status: OnboardingJobStatus;
+  pollUrl: string;
+  createdAt: string;
+}
+
+export interface OnboardingJobStatusResponse {
+  jobId: string;
+  websiteUrl: string;
+  category: OnboardingCategory;
+  email: string;
+  status: OnboardingJobStatus;
+  progress: OnboardingJobProgress;
+  errorCode?: string;
+  errorMessage?: string;
+  demoToken?: string;
+  demoUrl?: string;
+  demoId?: string;
+  productCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
+export interface OnboardingDemoResponse {
+  demoId: string;
+  websiteUrl: string;
+  category: OnboardingCategory;
+  productCount: number;
+  status: "ready" | "partial_ready";
+  createdAt: string;
+  expiresAt: string;
+  previewProducts: OnboardingIndexedProduct[];
+}
+
+export interface OnboardingDemoSearchResult {
+  products: OnboardingIndexedProduct[];
+  metadata: {
+    query: string;
+    totalResults: number;
+    returnedCount: number;
+    retrieval: {
+      vectorCandidates: number;
+      textCandidates: number;
+      mergedCandidates: number;
+      mode: "text_only" | "hybrid";
+      vectorStatus: "ok" | "empty" | "embedding_failed" | "vector_failed";
+    };
+    timings: {
+      textSearch: number;
+      embedding: number;
+      vectorSearch: number;
+      merge: number;
+      total: number;
+    };
+  };
+}
+
 // ============================================================================
 // Environment Configuration
 // ============================================================================
@@ -193,6 +355,8 @@ export const EnvSchema = z.object({
   // Optional override for NER/explanations. Defaults to LLM_MODEL.
   NER_MODEL: z.string().optional(),
   CORS_ORIGIN: z.string().optional(),
+  ONBOARDING_TOKEN_SECRET: z.string().optional(),
+  ONBOARDING_DEMO_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

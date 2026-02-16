@@ -13,8 +13,11 @@ import { AcademyChatService } from "./services/academyChatService.js";
 import { AcademyMetricsService } from "./services/academyMetricsService.js";
 import { WineImageSearchService } from "./services/wineImageSearchService.js";
 import { createSearchRoutes } from "./routes/search.js";
+import { createOnboardingRoutes } from "./routes/onboarding.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rateLimit.js";
+import { OnboardingService } from "./services/onboardingService.js";
+import { OnboardingWorker } from "./services/onboardingWorker.js";
 
 // ESM equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -83,12 +86,16 @@ async function buildServer() {
   const academyChatService = new AcademyChatService(env, academyMetricsService);
   const searchService = new SearchService(env, boostRuleService);
   const wineImageSearchService = new WineImageSearchService(env, searchService, productCatalogService);
+  const onboardingService = new OnboardingService(env);
+  const onboardingWorker = new OnboardingWorker(env, onboardingService);
   const productExplanationService = new ProductExplanationService(env);
   await boostRuleService.connect();
   await productCatalogService.connect();
   await academyMetricsService.connect();
   await academyChatService.connect();
   await searchService.initialize();
+  await onboardingService.connect();
+  onboardingWorker.start();
   server.log.info(
     { db: env.MONGO_DB, collection: env.MONGO_COLLECTION },
     "Search service initialized"
@@ -118,6 +125,7 @@ async function buildServer() {
       wineImageSearchService
     )
   );
+  await server.register(createOnboardingRoutes(onboardingService, onboardingWorker));
 
   // Graceful shutdown
   server.addHook("onClose", async () => {
@@ -127,6 +135,8 @@ async function buildServer() {
     await productCatalogService.close();
     await academyMetricsService.close();
     await academyChatService.close();
+    onboardingWorker.stop();
+    await onboardingService.close();
   });
 
   return server;

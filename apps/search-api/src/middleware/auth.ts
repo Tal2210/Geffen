@@ -24,9 +24,12 @@ export async function authMiddleware(
   reply: FastifyReply
 ) {
   const apiKey = request.headers["x-api-key"] as string;
+  const pathname = getPathname(request);
+  const isPublicOnboardingRoute =
+    isOnboardingRoute(pathname) && !isOnboardingInternalRoute(pathname);
 
-  // Skip auth for health check
-  if (request.url === "/health") {
+  // Skip auth for health, CORS preflight and public onboarding routes.
+  if (request.method === "OPTIONS" || pathname.endsWith("/health") || isPublicOnboardingRoute) {
     return;
   }
 
@@ -55,4 +58,26 @@ export async function authMiddleware(
  */
 export function getMerchantId(request: FastifyRequest): string {
   return (request as any).merchantId || "";
+}
+
+function getPathname(request: FastifyRequest): string {
+  const raw = String(request.raw.url || request.url || "").trim();
+  if (!raw) return "/";
+  const withoutQuery = raw.split("?")[0] || "/";
+  if (withoutQuery.startsWith("http://") || withoutQuery.startsWith("https://")) {
+    try {
+      return new URL(withoutQuery).pathname || "/";
+    } catch {
+      return withoutQuery;
+    }
+  }
+  return withoutQuery;
+}
+
+function isOnboardingRoute(pathname: string): boolean {
+  return /(?:^|\/)onboarding(?:\/|$)/.test(pathname);
+}
+
+function isOnboardingInternalRoute(pathname: string): boolean {
+  return /(?:^|\/)onboarding\/internal(?:\/|$)/.test(pathname);
 }

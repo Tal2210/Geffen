@@ -6,6 +6,8 @@ import { SectionHeader } from "./components/SectionHeader";
 import { SearchDemo } from "./components/SearchDemo";
 import { ProductsBoost } from "./components/ProductsBoost";
 import { AcademyChat } from "./components/AcademyChat";
+import { OnboardingFunnel } from "./components/OnboardingFunnel";
+import { OnboardingDemo } from "./components/OnboardingDemo";
 
 const SECTION_ORDER = ["PROMOTE_THIS_THEME", "FIX_THIS_ISSUE", "TALK_ABOUT_THIS"];
 
@@ -83,6 +85,12 @@ function InsightsPage() {
               className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all bg-purple-600 text-white hover:bg-purple-700 active:scale-[0.97] shadow-sm"
             >
               🍷 Search Demo
+            </Link>
+            <Link
+              to="/onboarding"
+              className="rounded-full px-4 py-2 text-[13px] font-semibold transition-all bg-emerald-600 text-white hover:bg-emerald-700 active:scale-[0.97] shadow-sm"
+            >
+              Onboarding Demo
             </Link>
             <Link
               to="/products-boost"
@@ -187,6 +195,8 @@ function App() {
       <Route path="/search-demo" element={<SearchDemo onBack={() => window.history.back()} />} />
       <Route path="/products-boost" element={<ProductsBoost onBack={() => window.history.back()} />} />
       <Route path="/academy" element={<AcademyChat onBack={() => window.history.back()} />} />
+      <Route path="/onboarding" element={<OnboardingFunnel />} />
+      <Route path="/onboarding/demo/:token" element={<OnboardingDemo />} />
     </Routes>
   );
 }
