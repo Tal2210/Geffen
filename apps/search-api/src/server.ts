@@ -61,6 +61,10 @@ async function buildServer() {
   const env = loadEnv();
 
   const server = Fastify({
+    // Onboarding demo tokens are longer than Fastify's default param length (100).
+    routerOptions: {
+      maxParamLength: 300,
+    },
     logger: {
       level: env.NODE_ENV === "production" ? "info" : "debug",
       transport:
