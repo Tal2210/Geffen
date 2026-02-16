@@ -17,6 +17,9 @@ export function createOnboardingRoutes(
     const AssistPreviewRequestSchema = z.object({
       productUrl: z.string().url().max(2048),
     });
+    const AssistAutoPreviewRequestSchema = z.object({
+      websiteUrl: z.string().url().max(2048),
+    });
 
     const AssistSelectorSchema = z.object({
       selector: z.string().min(1).max(400),
@@ -57,6 +60,26 @@ export function createOnboardingRoutes(
         return reply.status(422).send({
           error: "assist_preview_unavailable",
           message: "Could not load this product page preview. Please try another URL.",
+        });
+      }
+    });
+
+    server.post("/onboarding/assist/auto-preview", async (request, reply) => {
+      const parsed = AssistAutoPreviewRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const preview = await onboardingService.getAssistAutoPreview(parsed.data.websiteUrl);
+        return reply.send(preview);
+      } catch {
+        return reply.status(422).send({
+          error: "assist_preview_unavailable",
+          message: "Could not auto-detect a product page. You can still paste a product URL manually.",
         });
       }
     });

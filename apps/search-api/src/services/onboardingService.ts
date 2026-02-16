@@ -444,6 +444,22 @@ export class OnboardingService {
     };
   }
 
+  async getAssistAutoPreview(websiteUrl: string): Promise<{
+    normalizedUrl: string;
+    baseUrl: string;
+    html: string;
+  }> {
+    const normalizedWebsiteUrl = this.normalizeWebsiteUrl(websiteUrl);
+    this.assertPublicUrlSafe(normalizedWebsiteUrl);
+
+    const sampleProductUrl = await this.findSampleProductUrl(normalizedWebsiteUrl);
+    if (!sampleProductUrl) {
+      throw new Error("assist_preview_unavailable");
+    }
+
+    return this.getAssistPreview(sampleProductUrl);
+  }
+
   async saveAssistTemplate(input: OnboardingAssistTemplate): Promise<{ saved: true; domain: string }> {
     const websiteUrl = this.normalizeWebsiteUrl(input.websiteUrl);
     const productUrl = this.normalizeWebsiteUrl(input.productUrl);
@@ -696,6 +712,81 @@ export class OnboardingService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async findSampleProductUrl(websiteUrl: string): Promise<string | null> {
+    const parsed = new URL(websiteUrl);
+    const origin = parsed.origin;
+    const candidates = new Set<string>();
+
+    const tryAdd = (raw: string) => {
+      const value = String(raw || "").trim();
+      if (!value) return;
+      try {
+        const absolute = new URL(value, origin).toString();
+        const url = new URL(absolute);
+        if (url.origin !== origin) return;
+        if (!this.looksLikeProductUrl(url.toString())) return;
+        candidates.add(url.toString());
+      } catch {
+        // ignore invalid candidate
+      }
+    };
+
+    const sitemap = await this.fetchHtmlPreview(`${origin.replace(/\/$/, "")}/sitemap.xml`);
+    if (sitemap) {
+      const locRegex = /<loc>\s*([^<]+)\s*<\/loc>/gi;
+      let match: RegExpExecArray | null;
+      while ((match = locRegex.exec(sitemap))) {
+        tryAdd(String(match[1] || ""));
+        if (candidates.size >= 40) break;
+      }
+    }
+
+    const pages = [
+      websiteUrl,
+      `${origin}/collections/all`,
+      `${origin}/collections`,
+      `${origin}/shop`,
+      `${origin}/products`,
+      `${origin}/catalog`,
+    ];
+
+    for (const page of pages) {
+      if (candidates.size >= 40) break;
+      const html = await this.fetchHtmlPreview(page);
+      if (!html) continue;
+
+      const anchorRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
+      let anchorMatch: RegExpExecArray | null;
+      while ((anchorMatch = anchorRegex.exec(html))) {
+        tryAdd(String(anchorMatch[1] || ""));
+        if (candidates.size >= 40) break;
+      }
+
+      const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+      let jsonMatch: RegExpExecArray | null;
+      while ((jsonMatch = jsonLdRegex.exec(html))) {
+        const block = String(jsonMatch[1] || "");
+        const urlRegex = /"url"\s*:\s*"([^"]+)"/gi;
+        let urlMatch: RegExpExecArray | null;
+        while ((urlMatch = urlRegex.exec(block))) {
+          tryAdd(String(urlMatch[1] || ""));
+          if (candidates.size >= 40) break;
+        }
+        if (candidates.size >= 40) break;
+      }
+    }
+
+    return candidates.values().next().value || null;
+  }
+
+  private looksLikeProductUrl(url: string): boolean {
+    const value = String(url || "").toLowerCase();
+    return (
+      /\/(product|products|item|items|sku|p)\b/.test(value) ||
+      /\/collections\/[^/]+\/products\//.test(value)
+    );
   }
 
   private async ensureIndexes(): Promise<void> {

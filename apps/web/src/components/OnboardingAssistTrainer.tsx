@@ -44,6 +44,7 @@ export function OnboardingAssistTrainer({
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewBaseUrl, setPreviewBaseUrl] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [autoTried, setAutoTried] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -91,12 +92,64 @@ export function OnboardingAssistTrainer({
     }
   }, [initialProductUrl]);
 
+  useEffect(() => {
+    setPreviewHtml("");
+    setPreviewBaseUrl("");
+    setSelectors({});
+    setAutoTried(false);
+    setError(null);
+    setSuccess(null);
+    if (initialProductUrl) {
+      setProductUrl(initialProductUrl);
+    }
+  }, [websiteUrl, initialProductUrl]);
+
   const srcDoc = useMemo(() => {
     if (!previewHtml) return "";
     return buildPreviewDoc(previewHtml, previewBaseUrl);
   }, [previewHtml, previewBaseUrl]);
 
   const canSave = Boolean(websiteUrl.trim() && productUrl.trim() && selectors.name?.selector);
+
+  const loadAutoPreview = async () => {
+    if (!websiteUrl.trim()) return;
+    setLoadingPreview(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/onboarding/assist/auto-preview`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ websiteUrl: normalizeHttpUrl(websiteUrl) }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as Partial<AssistPreviewResponse> & {
+        message?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.message || payload.error || `Error ${response.status}`);
+      }
+
+      setPreviewHtml(String(payload.html || ""));
+      setPreviewBaseUrl(String(payload.baseUrl || ""));
+      if (payload.normalizedUrl) {
+        setProductUrl(String(payload.normalizedUrl));
+      }
+      setSuccess("Loaded a sample product page automatically. Now click each field to train the scraper.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not auto-load a product page. Paste one product URL manually."
+      );
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
 
   const loadPreview = async () => {
     setLoadingPreview(true);
@@ -134,6 +187,15 @@ export function OnboardingAssistTrainer({
       setLoadingPreview(false);
     }
   };
+
+  useEffect(() => {
+    if (!websiteUrl.trim()) return;
+    if (autoTried) return;
+    if (previewHtml) return;
+    setAutoTried(true);
+    void loadAutoPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [websiteUrl, autoTried, previewHtml]);
 
   const saveTemplate = async () => {
     if (!canSave) return;
@@ -215,7 +277,7 @@ export function OnboardingAssistTrainer({
               disabled={loadingPreview || !productUrl.trim()}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-4 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
             >
-              {loadingPreview ? "Loading..." : "Activate Guided Scraper"}
+              {loadingPreview ? "Loading..." : "Load This Product"}
             </button>
           </div>
         </label>
