@@ -172,6 +172,30 @@ export class ScraperOrchestratorService {
   ): Promise<ScraperResult> {
     const capped = Math.max(1, Math.min(limit, 50));
     const sources: ScrapedProduct[] = [];
+    const assistedTarget = Math.max(20, Math.min(40, capped));
+    let assistedExecuted = false;
+
+    // If guided selectors exist, use them first so extracted products keep the
+    // exact structure the user confirmed (name/price/image/description/etc).
+    if (assistTemplate) {
+      assistedExecuted = true;
+      const assisted = await this.extractWithAssistTemplate(discovery, assistTemplate, capped);
+      if (assisted.length > 0) {
+        sources.push(...assisted);
+      }
+      if (sources.length >= assistedTarget) {
+        const sourceBreakdown: Record<string, number> = {};
+        for (const product of sources) {
+          sourceBreakdown[product.source] = (sourceBreakdown[product.source] || 0) + 1;
+        }
+        return {
+          products: sources.slice(0, Math.max(capped * 2, 80)),
+          platform: discovery.platform,
+          sourceBreakdown,
+          usedBrowserFallback: false,
+        };
+      }
+    }
 
     if (discovery.platform === "shopify") {
       sources.push(...(await this.shopifyAdapter.extract(discovery.origin, capped)));
@@ -194,7 +218,7 @@ export class ScraperOrchestratorService {
       }
     }
 
-    if (assistTemplate && sources.length < Math.min(20, capped)) {
+    if (assistTemplate && !assistedExecuted && sources.length < assistedTarget) {
       const assisted = await this.extractWithAssistTemplate(discovery, assistTemplate, capped);
       if (assisted.length > 0) {
         sources.push(...assisted);

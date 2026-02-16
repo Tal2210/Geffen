@@ -374,7 +374,7 @@ export class OnboardingService {
       inStock: product.inStock,
       source: product.source,
       raw: product.raw,
-      attributesText: this.toAttributesText(product.raw?.attributes as Record<string, unknown> | undefined),
+      attributesText: this.toAttributesText(product.raw as Record<string, unknown> | undefined),
       embedding: product.embedding,
       createdAt: now.toISOString(),
       expiresAt,
@@ -862,10 +862,22 @@ export class OnboardingService {
     };
   }
 
-  private toAttributesText(attributes?: Record<string, unknown>): string | undefined {
-    if (!attributes || typeof attributes !== "object") return undefined;
-    const text = Object.entries(attributes)
-      .map(([key, value]) => `${key} ${String(value || "")}`.trim())
+  private toAttributesText(raw?: Record<string, unknown>): string | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const attributes =
+      raw.attributes && typeof raw.attributes === "object"
+        ? (raw.attributes as Record<string, unknown>)
+        : {};
+    const softCategories = Array.isArray(raw.softCategories)
+      ? (raw.softCategories as unknown[])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      : [];
+
+    const text = [
+      ...Object.entries(attributes).map(([key, value]) => `${key} ${String(value || "")}`.trim()),
+      softCategories.join(" "),
+    ]
       .filter(Boolean)
       .join(" | ")
       .slice(0, 2000);

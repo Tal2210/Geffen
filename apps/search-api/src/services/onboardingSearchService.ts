@@ -57,15 +57,14 @@ export class OnboardingSearchService {
     const textStart = Date.now();
     const textCandidates = await this.textSearch(demoId, terms, Math.max(cappedLimit * 3, 60));
     timings.textSearch = Date.now() - textStart;
-
-    const useTextOnly = this.isTextStrongEnough(textCandidates, cappedLimit);
+    const textStrong = this.isTextStrongEnough(textCandidates, cappedLimit);
+    const querySoftTags = this.deriveWineSoftTags(query);
 
     let vectorCandidates: OnboardingIndexedProduct[] = [];
-    let vectorStatus: "ok" | "empty" | "embedding_failed" | "vector_failed" = useTextOnly
-      ? "empty"
-      : "vector_failed";
+    let vectorStatus: "ok" | "empty" | "embedding_failed" | "vector_failed" = "vector_failed";
+    const shouldAttemptVector = query.trim().length > 0;
 
-    if (!useTextOnly) {
+    if (shouldAttemptVector) {
       const embedStart = Date.now();
       const embeddingResult = await Promise.resolve(
         this.embeddingService.generateEmbedding(query)
@@ -86,17 +85,23 @@ export class OnboardingSearchService {
       } else {
         vectorStatus = "embedding_failed";
       }
+    } else {
+      vectorStatus = "empty";
     }
 
     const mergeStart = Date.now();
-    const merged = useTextOnly
-      ? this.mergeHybridCandidates([], textCandidates)
-      : this.mergeHybridCandidates(vectorCandidates, textCandidates);
+    const merged = this.mergeHybridCandidates(vectorCandidates, textCandidates, querySoftTags);
     timings.merge = Date.now() - mergeStart;
 
     timings.total = Date.now() - startTotal;
 
     const paginated = merged.slice(offset, offset + cappedLimit);
+    const mode: "text_only" | "hybrid" =
+      vectorStatus === "ok" || vectorStatus === "empty"
+        ? "hybrid"
+        : textStrong
+          ? "text_only"
+          : "hybrid";
 
     return {
       products: paginated,
@@ -108,7 +113,7 @@ export class OnboardingSearchService {
           vectorCandidates: vectorCandidates.length,
           textCandidates: textCandidates.length,
           mergedCandidates: merged.length,
-          mode: useTextOnly ? "text_only" : "hybrid",
+          mode,
           vectorStatus,
         },
         timings,
@@ -246,7 +251,8 @@ export class OnboardingSearchService {
 
   private mergeHybridCandidates(
     vectorResults: OnboardingIndexedProduct[],
-    textResults: OnboardingIndexedProduct[]
+    textResults: OnboardingIndexedProduct[],
+    querySoftTags: string[]
   ): OnboardingIndexedProduct[] {
     const byId = new Map<
       string,
@@ -291,11 +297,14 @@ export class OnboardingSearchService {
       .map(({ product, semanticScore, textScore }) => {
         const hasSemantic = semanticScore > 0;
         const hasText = textScore > 0;
+        const productSoftTags = this.extractProductSoftTags(product);
+        const softTagHits = querySoftTags.filter((tag) => productSoftTags.has(tag)).length;
 
         let retrievalScore = semanticScore * 0.74 + textScore * 0.26;
         if (hasSemantic && hasText) retrievalScore += 0.07;
         if (!hasSemantic && hasText) retrievalScore = 0.22 + textScore * 0.55;
         if (hasSemantic && !hasText) retrievalScore = Math.max(retrievalScore, semanticScore * 0.72);
+        if (softTagHits > 0) retrievalScore += Math.min(0.12, softTagHits * 0.035);
 
         retrievalScore = Math.min(1, retrievalScore);
         return {
@@ -309,6 +318,7 @@ export class OnboardingSearchService {
 
   private computeTextCoverageScore(product: OnboardingIndexedProduct, terms: string[]): number {
     if (terms.length === 0) return 0.2;
+    const softTagsText = Array.from(this.extractProductSoftTags(product)).join(" ");
     const candidate = this.normalizeForTextSearch(
       [
         product.name,
@@ -316,6 +326,7 @@ export class OnboardingSearchService {
         product.brand || "",
         product.category || "",
         this.attributesText(product.raw?.attributes as Record<string, unknown> | undefined),
+        softTagsText,
       ].join(" ")
     );
 
@@ -408,6 +419,68 @@ export class OnboardingSearchService {
     return Object.entries(attributes)
       .map(([k, v]) => `${k} ${String(v || "")}`)
       .join(" ");
+  }
+
+  private extractProductSoftTags(product: OnboardingIndexedProduct): Set<string> {
+    const tags = new Set<string>();
+    const raw = product.raw as Record<string, unknown> | undefined;
+    if (!raw || typeof raw !== "object") return tags;
+
+    if (Array.isArray(raw.softCategories)) {
+      for (const value of raw.softCategories as unknown[]) {
+        const tag = this.normalizeForTextSearch(String(value || ""));
+        if (tag) tags.add(tag);
+      }
+    }
+
+    const attributes =
+      raw.attributes && typeof raw.attributes === "object"
+        ? (raw.attributes as Record<string, unknown>)
+        : {};
+    const softText = this.normalizeForTextSearch(String(attributes.soft_categories || ""));
+    for (const token of softText.split(/\s+/).filter((item) => item.length > 1)) {
+      tags.add(token);
+    }
+
+    return tags;
+  }
+
+  private deriveWineSoftTags(query: string): string[] {
+    const source = this.normalizeForTextSearch(query);
+    if (!source) return [];
+    const tags = new Set<string>();
+    const add = (values: string[]) => {
+      for (const value of values) {
+        const clean = this.normalizeForTextSearch(value);
+        if (clean) tags.add(clean);
+      }
+    };
+
+    if (/(fish|seafood|דג|דגים|סושי)/.test(source)) add(["fish", "seafood", "pairing_fish", "דגים"]);
+    if (/(pizza|pasta|italian|איטלק|פיצה|פסטה)/.test(source)) {
+      add(["italian_food", "pairing_italian", "pizza", "pasta", "איטלקי"]);
+    }
+    if (/(meat|steak|bbq|grill|בשר|סטייק|גריל)/.test(source)) add(["meat", "bbq", "pairing_meat", "בשר"]);
+    if (/(crispy|crisp|fresh|zesty|acid|acidity|רענן|קריספי|חומציות)/.test(source)) {
+      add(["crisp", "fresh", "high_acidity", "רענן", "קריספי"]);
+    }
+    if (/(full bod|rich|bold|גוף מלא|עשיר|עוצמתי)/.test(source)) add(["full_body", "rich", "bold", "גוף מלא"]);
+    if (/(light bod|easy drinking|קליל|גוף קל)/.test(source)) add(["light_body", "easy_drinking", "קליל"]);
+    if (/(dry|יבש)/.test(source)) add(["dry", "יבש"]);
+    if (/(semi dry|חצי יבש)/.test(source)) add(["semi_dry", "חצי יבש"]);
+    if (/(sweet|dessert|מתוק|קינוח)/.test(source)) add(["sweet", "dessert_wine", "מתוק"]);
+    if (/(rose|rosé|רוזה)/.test(source)) add(["rose", "רוזה"]);
+    if (/(sparkling|mous|בועות|מבעבע)/.test(source)) add(["sparkling", "בועות"]);
+    if (/(kosher|כשר)/.test(source)) add(["kosher", "כשר"]);
+    if (
+      /(germany|austria|sweden|denmark|netherlands|belgium|scandinav|גרמניה|אוסטריה|סקנדינביה|צפון אירופה)/.test(
+        source
+      )
+    ) {
+      add(["north_europe", "צפון אירופה"]);
+    }
+
+    return Array.from(tags).filter(Boolean);
   }
 
   private normalizeForTextSearch(value: string): string {

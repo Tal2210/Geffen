@@ -126,17 +126,20 @@ export class OnboardingWorker {
       40,
       50
     );
+    const normalizedForSearch = normalized.products.map((product) =>
+      this.enrichProductForSearch(product, job.category)
+    );
     await this.onboardingService.updateJobCounters(job.jobId, {
-      normalized: normalized.products.length,
+      normalized: normalizedForSearch.length,
     });
 
-    if (normalized.products.length === 0) {
+    if (normalizedForSearch.length === 0) {
       throw new Error("scrape_no_products");
     }
 
     await this.onboardingService.setJobLivePreview(
       job.jobId,
-      normalized.products.slice(0, 12).map((item, idx) => ({
+      normalizedForSearch.slice(0, 12).map((item, idx) => ({
         _id: `preview-${idx}`,
         demoId: "",
         jobId: job.jobId,
@@ -157,10 +160,10 @@ export class OnboardingWorker {
       }))
     );
 
-    await this.progress(job.jobId, "sample", 56, `Sampled ${normalized.products.length} products`);
+    await this.progress(job.jobId, "sample", 56, `Sampled ${normalizedForSearch.length} products`);
 
     await this.progress(job.jobId, "embed", 72, "Generating embeddings");
-    const withEmbeddings = await this.embedProducts(job.jobId, normalized.products);
+    const withEmbeddings = await this.embedProducts(job.jobId, normalizedForSearch);
     await this.onboardingService.updateJobCounters(job.jobId, {
       embedded: withEmbeddings.length,
     });
@@ -240,6 +243,12 @@ export class OnboardingWorker {
         product.brand,
         product.category,
         product.description,
+        product.raw?.softCategories
+          ? (product.raw.softCategories as unknown[])
+              .map((value) => String(value || "").trim())
+              .filter(Boolean)
+              .join(" | ")
+          : "",
         product.raw?.attributes
           ? Object.entries(product.raw.attributes as Record<string, unknown>)
               .map(([k, v]) => `${k}: ${String(v || "")}`)
@@ -261,6 +270,111 @@ export class OnboardingWorker {
       }
     }
     return out;
+  }
+
+  private enrichProductForSearch(
+    product: {
+      name: string;
+      description?: string;
+      brand?: string;
+      category?: string;
+      price: number;
+      currency?: string;
+      imageUrl?: string;
+      productUrl: string;
+      inStock?: boolean;
+      source: "shopify" | "woocommerce" | "generic_static" | "browser_fallback";
+      raw?: Record<string, unknown>;
+    },
+    category: OnboardingCategory
+  ) {
+    if (category !== "wine") {
+      return product;
+    }
+
+    const attributes =
+      product.raw && typeof product.raw.attributes === "object" && product.raw.attributes
+        ? ({ ...(product.raw.attributes as Record<string, unknown>) } as Record<string, unknown>)
+        : {};
+
+    const softCategories = this.deriveWineSoftCategories(
+      [product.name, product.brand || "", product.description || "", String(attributes.pairing || "")].join(" | ")
+    );
+
+    if (softCategories.length === 0) {
+      return product;
+    }
+
+    attributes.soft_categories = softCategories.join(" | ");
+    const raw: Record<string, unknown> = {
+      ...(product.raw || {}),
+      attributes,
+      softCategories,
+    };
+
+    return {
+      ...product,
+      raw,
+    };
+  }
+
+  private deriveWineSoftCategories(text: string): string[] {
+    const source = String(text || "").toLowerCase();
+    if (!source.trim()) return [];
+
+    const tags = new Set<string>();
+    const add = (values: string[]) => {
+      for (const value of values) {
+        const clean = String(value || "").trim().toLowerCase();
+        if (clean) tags.add(clean);
+      }
+    };
+
+    if (/(fish|seafood|דג|דגים|פירות ים|סושי)/.test(source)) {
+      add(["fish", "seafood", "pairing_fish", "דגים"]);
+    }
+    if (/(pizza|pasta|italian|איטלק|פיצה|פסטה)/.test(source)) {
+      add(["italian_food", "pairing_italian", "pizza", "pasta", "איטלקי"]);
+    }
+    if (/(meat|steak|bbq|grill|בשר|סטייק|על האש|גריל)/.test(source)) {
+      add(["meat", "bbq", "pairing_meat", "בשר"]);
+    }
+    if (/(crispy|crisp|fresh|zesty|acid|acidity|רענן|קריספי|חומצי|חומציות)/.test(source)) {
+      add(["crisp", "fresh", "high_acidity", "רענן", "קריספי"]);
+    }
+    if (/(full[-\s]?bod|rich|bold|intense|גוף מלא|עשיר|עוצמתי)/.test(source)) {
+      add(["full_body", "rich", "bold", "גוף מלא"]);
+    }
+    if (/(light[-\s]?bod|easy[-\s]?drinking|קליל|גוף קל)/.test(source)) {
+      add(["light_body", "easy_drinking", "קליל"]);
+    }
+    if (/(dry|יבש)/.test(source)) {
+      add(["dry", "יבש"]);
+    }
+    if (/(semi[-\s]?dry|off[-\s]?dry|חצי יבש)/.test(source)) {
+      add(["semi_dry", "חצי יבש"]);
+    }
+    if (/(sweet|dessert|מתוק|קינוח)/.test(source)) {
+      add(["sweet", "dessert_wine", "מתוק"]);
+    }
+    if (/(ros[eé]|רוזה)/.test(source)) {
+      add(["rose", "רוזה"]);
+    }
+    if (/(sparkling|bubbles|מבעבע|בועות)/.test(source)) {
+      add(["sparkling", "בועות"]);
+    }
+    if (/(kosher|כשר)/.test(source)) {
+      add(["kosher", "כשר"]);
+    }
+    if (
+      /(germany|austria|sweden|denmark|netherlands|belgium|scandinav|גרמניה|אוסטריה|סקנדינביה)/.test(
+        source
+      )
+    ) {
+      add(["north_europe", "צפון אירופה"]);
+    }
+
+    return Array.from(tags).slice(0, 30);
   }
 
   private async progress(
