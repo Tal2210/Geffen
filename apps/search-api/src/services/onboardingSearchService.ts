@@ -1,10 +1,14 @@
 import { MongoClient, type Collection, type Db } from "mongodb";
 import type {
   Env,
+  ExtractedFilters,
+  OnboardingCategory,
   OnboardingDemoSearchResult,
   OnboardingIndexedProduct,
 } from "../types/index.js";
 import { EmbeddingService } from "./embeddingService.js";
+import { EntityExtractionService } from "./entityExtractionService.js";
+import { QueryParser } from "./queryParser.js";
 
 type OnboardingProductDoc = Omit<OnboardingIndexedProduct, "_id"> & {
   _id: any;
@@ -15,11 +19,15 @@ export class OnboardingSearchService {
   private db!: Db;
   private products!: Collection<OnboardingProductDoc>;
   private embeddingService: EmbeddingService;
+  private parser: QueryParser;
+  private entityExtractor: EntityExtractionService;
   private readonly vectorIndex = "onboarding_vector_index";
 
   constructor(private env: Env) {
     this.client = new MongoClient(env.MONGO_URI);
     this.embeddingService = new EmbeddingService(env);
+    this.parser = new QueryParser();
+    this.entityExtractor = new EntityExtractionService(env);
   }
 
   async connect(): Promise<void> {
@@ -36,7 +44,10 @@ export class OnboardingSearchService {
     demoId: string,
     query: string,
     limit = 24,
-    offset = 0
+    offset = 0,
+    options?: {
+      demoCategory?: OnboardingCategory;
+    }
   ): Promise<OnboardingDemoSearchResult> {
     const timings = {
       textSearch: 0,
@@ -48,7 +59,12 @@ export class OnboardingSearchService {
     const startTotal = Date.now();
 
     const cappedLimit = Math.max(1, Math.min(limit, 50));
-    const normalizedQuery = this.normalizeForTextSearch(query);
+
+    const ruleFilters = this.parser.parse(query);
+    const ner = await this.entityExtractor.extract(query).catch(() => ({ filters: {} as ExtractedFilters }));
+    const extractedFilters = this.mergeFilters(ruleFilters, ner.filters || {});
+    const cleanedQuery = this.parser.cleanQuery(query, extractedFilters);
+    const normalizedQuery = this.normalizeForTextSearch(cleanedQuery);
     const terms = normalizedQuery
       .split(/\s+/)
       .map((token) => token.trim())
@@ -58,7 +74,12 @@ export class OnboardingSearchService {
     const textCandidates = await this.textSearch(demoId, terms, Math.max(cappedLimit * 3, 60));
     timings.textSearch = Date.now() - textStart;
     const textStrong = this.isTextStrongEnough(textCandidates, cappedLimit);
-    const querySoftTags = this.deriveWineSoftTags(query);
+    const querySoftTags = Array.from(
+      new Set([
+        ...this.deriveWineSoftTags(query),
+        ...((extractedFilters.softTags || []).map((tag) => this.normalizeForTextSearch(String(tag || "")))),
+      ])
+    ).filter(Boolean);
 
     let vectorCandidates: OnboardingIndexedProduct[] = [];
     let vectorStatus: "ok" | "empty" | "embedding_failed" | "vector_failed" = "vector_failed";
@@ -67,7 +88,7 @@ export class OnboardingSearchService {
     if (shouldAttemptVector) {
       const embedStart = Date.now();
       const embeddingResult = await Promise.resolve(
-        this.embeddingService.generateEmbedding(query)
+        this.embeddingService.generateEmbedding(cleanedQuery || query)
       )
         .then((value) => ({ status: "fulfilled" as const, value }))
         .catch((reason) => ({ status: "rejected" as const, reason }));
@@ -91,11 +112,12 @@ export class OnboardingSearchService {
 
     const mergeStart = Date.now();
     const merged = this.mergeHybridCandidates(vectorCandidates, textCandidates, querySoftTags);
+    const hardFiltered = this.applyHardConstraints(merged, extractedFilters, options?.demoCategory);
     timings.merge = Date.now() - mergeStart;
 
     timings.total = Date.now() - startTotal;
 
-    const paginated = merged.slice(offset, offset + cappedLimit);
+    const paginated = hardFiltered.slice(offset, offset + cappedLimit);
     const mode: "text_only" | "hybrid" =
       vectorStatus === "ok" || vectorStatus === "empty"
         ? "hybrid"
@@ -107,12 +129,12 @@ export class OnboardingSearchService {
       products: paginated,
       metadata: {
         query,
-        totalResults: merged.length,
+        totalResults: hardFiltered.length,
         returnedCount: paginated.length,
         retrieval: {
           vectorCandidates: vectorCandidates.length,
           textCandidates: textCandidates.length,
-          mergedCandidates: merged.length,
+          mergedCandidates: hardFiltered.length,
           mode,
           vectorStatus,
         },
@@ -382,6 +404,222 @@ export class OnboardingSearchService {
     const countThreshold = Math.max(3, Math.min(7, Math.ceil(Math.max(requestedLimit, 4) * 0.45)));
 
     return topScore >= 0.78 && topThreeAvg >= 0.64 && strongHits >= countThreshold;
+  }
+
+  private mergeFilters(rule: ExtractedFilters, ner: ExtractedFilters): ExtractedFilters {
+    const mergeUnique = (left?: string[], right?: string[]) =>
+      Array.from(new Set([...(left || []), ...(right || [])]));
+
+    return {
+      ...rule,
+      ...ner,
+      countries: mergeUnique(rule.countries, ner.countries),
+      regions: mergeUnique(rule.regions, ner.regions),
+      grapes: mergeUnique(rule.grapes, ner.grapes),
+      sweetness: mergeUnique(rule.sweetness, ner.sweetness),
+      type: mergeUnique(rule.type, ner.type),
+      category: mergeUnique(rule.category, ner.category),
+      softTags: mergeUnique(rule.softTags, ner.softTags),
+      priceRange: {
+        ...(rule.priceRange || {}),
+        ...(ner.priceRange || {}),
+      },
+      kosher:
+        rule.kosher === true || ner.kosher === true
+          ? true
+          : rule.kosher === false || ner.kosher === false
+            ? false
+            : undefined,
+    };
+  }
+
+  private applyHardConstraints(
+    products: OnboardingIndexedProduct[],
+    filters: ExtractedFilters,
+    demoCategory?: OnboardingCategory
+  ): OnboardingIndexedProduct[] {
+    if (!products.length) return products;
+
+    const hasHardCountry = (filters.countries || []).length > 0;
+    const hasHardColor = (filters.category || []).length > 0;
+    const hasHardType = (filters.type || []).length > 0;
+    const hasHardGrape = (filters.grapes || []).length > 0;
+    const hasHardSweetness = (filters.sweetness || []).length > 0;
+    const hasHardPrice =
+      filters.priceRange?.min !== undefined || filters.priceRange?.max !== undefined;
+    const hasHardKosher = filters.kosher !== undefined;
+
+    const needsHardFiltering =
+      hasHardCountry ||
+      hasHardColor ||
+      hasHardType ||
+      hasHardGrape ||
+      hasHardSweetness ||
+      hasHardPrice ||
+      hasHardKosher ||
+      demoCategory === "wine";
+
+    if (!needsHardFiltering) return products;
+
+    const countryAliasMap: Record<string, string[]> = {
+      france: ["france", "french", "צרפת", "צרפתי", "צרפתית"],
+      italy: ["italy", "italian", "איטליה", "איטלקי", "איטלקית"],
+      spain: ["spain", "spanish", "ספרד", "ספרדי", "ספרדית"],
+      usa: ["usa", "united states", "america", "ארצות הברית", "ארהב", "אמריק"],
+      argentina: ["argentina", "argentinian", "ארגנטינה", "ארגנטינאי"],
+      chile: ["chile", "chilean", "צילה", "צ'ילה"],
+      australia: ["australia", "australian", "אוסטרליה", "אוסטרלי"],
+      germany: ["germany", "german", "גרמניה", "גרמני"],
+      portugal: ["portugal", "portuguese", "פורטוגל", "פורטוגלי"],
+      israel: ["israel", "israeli", "ישראל", "ישראלי"],
+    };
+
+    const colorTokenMap: Record<string, string[]> = {
+      red: ["red", "יין אדום", "אדום", "rosso", "tinto", "rouge"],
+      white: ["white", "יין לבן", "לבן", "blanc", "blanco", "bianco"],
+      "rosé": ["rose", "rosé", "רוזה", "pink", "יין רוזה"],
+      rose: ["rose", "rosé", "רוזה", "pink", "יין רוזה"],
+      sparkling: ["sparkling", "מבעבע", "champagne", "prosecco", "cava", "יין מבעבע"],
+    };
+
+    const typeTokenMap: Record<string, string[]> = {
+      wine: ["wine", "יין"],
+      beer: ["beer", "בירה"],
+      vodka: ["vodka", "וודקה"],
+      whiskey: ["whiskey", "whisky", "וויסקי"],
+      gin: ["gin", "ג'ין", "ג׳ין", "גין"],
+      rum: ["rum", "רום"],
+      tequila: ["tequila", "טקילה"],
+      liqueur: ["liqueur", "ליקר"],
+      brandy: ["brandy", "קוניאק", "ברנדי"],
+      soda: ["soda", "soft drink", "משקאות קלים"],
+    };
+
+    const countryTokens = Array.from(
+      new Set(
+        (filters.countries || [])
+          .flatMap((country) => {
+            const key = this.normalizeForTextSearch(String(country || ""));
+            return countryAliasMap[key] || [key];
+          })
+          .map((value) => this.normalizeForTextSearch(String(value || "")))
+          .filter(Boolean)
+      )
+    );
+
+    const colorTokens = Array.from(
+      new Set(
+        (filters.category || [])
+          .flatMap((color) => colorTokenMap[this.normalizeForTextSearch(color)] || [color])
+          .map((value) => this.normalizeForTextSearch(String(value || "")))
+          .filter(Boolean)
+      )
+    );
+
+    const typeTokens = Array.from(
+      new Set(
+        (filters.type || [])
+          .flatMap((kind) => typeTokenMap[this.normalizeForTextSearch(kind)] || [kind])
+          .map((value) => this.normalizeForTextSearch(String(value || "")))
+          .filter(Boolean)
+      )
+    );
+
+    const grapeTokens = (filters.grapes || [])
+      .map((value) => this.normalizeForTextSearch(String(value || "")))
+      .filter(Boolean);
+    const sweetnessTokens = (filters.sweetness || [])
+      .map((value) => this.normalizeForTextSearch(String(value || "")))
+      .filter(Boolean);
+
+    const requiresWineScope =
+      demoCategory === "wine" ||
+      typeTokens.some((token) => token.includes("wine") || token.includes("יין")) ||
+      colorTokens.length > 0 ||
+      countryTokens.length > 0 ||
+      grapeTokens.length > 0 ||
+      sweetnessTokens.length > 0;
+
+    return products.filter((product) => {
+      const haystack = this.buildProductHaystack(product);
+      if (!haystack) return false;
+
+      if (requiresWineScope && !this.looksLikeWineProduct(haystack)) {
+        return false;
+      }
+
+      if (typeTokens.length > 0) {
+        const matchesType = typeTokens.some((token) => haystack.includes(token));
+        if (!matchesType) return false;
+      }
+
+      if (colorTokens.length > 0) {
+        const matchesColor = colorTokens.some((token) => haystack.includes(token));
+        if (!matchesColor) return false;
+      }
+
+      if (countryTokens.length > 0) {
+        const matchesCountry = countryTokens.some((token) => haystack.includes(token));
+        if (!matchesCountry) return false;
+      }
+
+      if (grapeTokens.length > 0) {
+        const matchesGrape = grapeTokens.some((token) => haystack.includes(token));
+        if (!matchesGrape) return false;
+      }
+
+      if (sweetnessTokens.length > 0) {
+        const matchesSweetness = sweetnessTokens.some((token) => haystack.includes(token));
+        if (!matchesSweetness) return false;
+      }
+
+      if (filters.kosher !== undefined) {
+        const hasKosherSignal = /\bkosher\b|כשר/.test(haystack);
+        if (filters.kosher && !hasKosherSignal) return false;
+      }
+
+      if (filters.priceRange) {
+        const price = Number(product.price || 0);
+        if (filters.priceRange.min !== undefined && price < filters.priceRange.min) return false;
+        if (filters.priceRange.max !== undefined && price > filters.priceRange.max) return false;
+      }
+
+      return true;
+    });
+  }
+
+  private buildProductHaystack(product: OnboardingIndexedProduct): string {
+    const raw = (product.raw || {}) as Record<string, unknown>;
+    const attributes =
+      raw.attributes && typeof raw.attributes === "object"
+        ? (raw.attributes as Record<string, unknown>)
+        : {};
+    const softCategories = Array.isArray(raw.softCategories)
+      ? (raw.softCategories as unknown[]).map((value) => String(value || ""))
+      : [];
+
+    return this.normalizeForTextSearch(
+      [
+        product.name,
+        product.description || "",
+        product.brand || "",
+        product.category || "",
+        product.inStock === true ? "in stock זמין" : "",
+        ...Object.entries(attributes).map(([k, v]) => `${k} ${String(v || "")}`),
+        softCategories.join(" "),
+      ].join(" | ")
+    );
+  }
+
+  private looksLikeWineProduct(haystack: string): boolean {
+    if (!haystack) return false;
+    if (/\bwine\b|יין|יקב|vintage|grape|cabernet|merlot|chardonnay|riesling/.test(haystack)) {
+      return true;
+    }
+    if (/red|white|rose|rosé|sparkling|אדום|לבן|רוזה|מבעבע/.test(haystack)) {
+      return true;
+    }
+    return false;
   }
 
   private toProduct(doc: OnboardingProductDoc): OnboardingIndexedProduct {

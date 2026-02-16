@@ -466,7 +466,9 @@ export class OnboardingService {
     const demo = await this.demos.findOne({ tokenHash, tokenExp: { $gt: nowIso } });
     if (!demo) return null;
 
-    return this.searchService.search(demo.demoId, input.query, input.limit, input.offset);
+    return this.searchService.search(demo.demoId, input.query, input.limit, input.offset, {
+      demoCategory: demo.category,
+    });
   }
 
   async trackEvent(event: OnboardingTrackEvent, context: { ip?: string; userAgent?: string }): Promise<void> {
