@@ -381,14 +381,30 @@ export function OnboardingAssistTrainer({
         },
         body: JSON.stringify(payload),
       });
-
-      const sample = (await response.json().catch(() => ({}))) as AssistExtractSampleResponse & {
+      const rawText = await response.text();
+      const sample = (safeParseJson(rawText) || {}) as AssistExtractSampleResponse & {
         error?: string;
         message?: string;
       };
 
       if (!response.ok) {
-        throw new Error(sample.message || sample.error || `Error ${response.status}`);
+        const message = sample.message || sample.error || rawText || `Error ${response.status}`;
+        const routeMissing =
+          response.status === 404 &&
+          /route\s+post:\/onboarding\/assist\/extract-sample\s+not\s+found/i.test(message);
+
+        if (routeMissing && previewHtml) {
+          const localSample = extractSampleFromPreview(payload, previewHtml, previewBaseUrl);
+          onSampleReady({
+            templatePayload: payload,
+            sampleResult: localSample,
+            capturedCount,
+            requiredCount,
+          });
+          setSuccess("שרת עדיין מתעדכן. ביצענו בדיקת דוגמה מקומית והמשך התהליך פתוח.");
+          return;
+        }
+        throw new Error(message);
       }
 
       onSampleReady({
@@ -588,6 +604,141 @@ export function OnboardingAssistTrainer({
       </div>
     </section>
   );
+}
+
+function extractSampleFromPreview(
+  payload: GuideTemplatePayload,
+  html: string,
+  baseUrl: string
+): AssistExtractSampleResponse {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(String(html || ""), "text/html");
+
+  const extract = (selector?: { selector: string; mode: FieldMode }): string => {
+    if (!selector?.selector) return "";
+    const element = findByLooseSelector(doc, selector.selector);
+    if (!element) return "";
+    if (selector.mode === "src") {
+      const rawSrc =
+        element.getAttribute("src") ||
+        element.getAttribute("data-src") ||
+        element.getAttribute("content") ||
+        "";
+      return toAbsoluteUrl(rawSrc, baseUrl);
+    }
+    return String(
+      element.getAttribute("content") ||
+        element.getAttribute("aria-label") ||
+        element.textContent ||
+        ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const name = extract(payload.selectors.name) || undefined;
+  const priceText = extract(payload.selectors.price);
+  const description = extract(payload.selectors.description) || undefined;
+  const imageUrl = extract(payload.selectors.image) || undefined;
+  const inStockText = extract(payload.selectors.inStock);
+
+  const attributes: Record<string, string> = {};
+  for (const field of payload.customFields || []) {
+    const value = extract(field.selector);
+    if (value) {
+      attributes[field.key] = value.slice(0, 300);
+    }
+  }
+
+  const price = parseLoosePrice(priceText);
+  const inStock = parseInStockLoose(inStockText || description || "");
+
+  const missingFields: string[] = [];
+  if (!name) missingFields.push("name");
+  if (!Number.isFinite(price) || price <= 0) missingFields.push("price");
+  if (!description) missingFields.push("description");
+  if (!imageUrl) missingFields.push("image");
+  for (const field of payload.customFields || []) {
+    if (!attributes[field.key]) {
+      missingFields.push(`custom:${field.key}`);
+    }
+  }
+
+  return {
+    sampleProduct: {
+      name,
+      price: Number.isFinite(price) ? price : undefined,
+      currency: "ILS",
+      imageUrl,
+      description,
+      inStock,
+      attributes,
+    },
+    missingFields,
+  };
+}
+
+function findByLooseSelector(doc: Document, selector: string): Element | null {
+  const raw = String(selector || "").trim();
+  if (!raw) return null;
+
+  const trySelect = (candidate: string): Element | null => {
+    try {
+      return doc.querySelector(candidate);
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = trySelect(raw);
+  if (direct) return direct;
+
+  const tokens = raw.split(/[\s>+~]+/).filter(Boolean);
+  for (let i = tokens.length - 1; i >= 0; i -= 1) {
+    const candidate = String(tokens[i] || "");
+    if (!candidate) continue;
+    const found = trySelect(candidate);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function parseLoosePrice(value: string): number {
+  const text = String(value || "").replace(/,/g, "");
+  const match = text.match(/(\d{1,5}(?:\.\d{1,2})?)/);
+  if (!match) return 0;
+  const num = Number(match[1]);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function parseInStockLoose(value: string): boolean {
+  const text = String(value || "").toLowerCase();
+  if (!text) return true;
+  if (
+    /out\s?of\s?stock|אזל|אין במלאי|לא זמין|נגמר|sold\s?out|unavailable/.test(text)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function toAbsoluteUrl(rawValue: string, baseUrl: string): string {
+  const value = String(rawValue || "").trim();
+  if (!value) return "";
+  try {
+    return new URL(value, baseUrl).toString();
+  } catch {
+    return value;
+  }
+}
+
+function safeParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function buildPreviewDoc(rawHtml: string, baseUrl: string): string {
