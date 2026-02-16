@@ -319,9 +319,26 @@ export class OnboardingWorker {
         ? ({ ...(product.raw.attributes as Record<string, unknown>) } as Record<string, unknown>)
         : {};
 
-    const softCategories = this.deriveWineSoftCategories(
-      [product.name, product.brand || "", product.description || "", String(attributes.pairing || "")].join(" | ")
-    );
+    const sourceText = [
+      product.name,
+      product.brand || "",
+      product.description || "",
+      String(attributes.pairing || ""),
+      String(attributes.product_category || ""),
+      String(attributes.wine_color || ""),
+    ].join(" | ");
+
+    const detectedType = this.detectBeverageType(sourceText);
+    const detectedWineColor = this.detectWineColor(sourceText);
+
+    if (!attributes.product_category) {
+      attributes.product_category = detectedType || "wine";
+    }
+    if (!attributes.wine_color && detectedWineColor) {
+      attributes.wine_color = detectedWineColor;
+    }
+
+    const softCategories = this.deriveWineSoftCategories(sourceText);
 
     if (softCategories.length === 0) {
       return product;
@@ -397,6 +414,31 @@ export class OnboardingWorker {
     }
 
     return Array.from(tags).slice(0, 30);
+  }
+
+  private detectBeverageType(text: string): string | undefined {
+    const source = String(text || "").toLowerCase();
+    if (!source.trim()) return undefined;
+    if (/\b(whisky|whiskey|וויסקי)\b/.test(source)) return "whiskey";
+    if (/\b(gin|ג׳ין|גין)\b/.test(source)) return "gin";
+    if (/\b(vodka|וודקה)\b/.test(source)) return "vodka";
+    if (/\b(rum|רום)\b/.test(source)) return "rum";
+    if (/\b(tequila|טקילה)\b/.test(source)) return "tequila";
+    if (/\b(liqueur|ליקר)\b/.test(source)) return "liqueur";
+    if (/\b(brandy|קוניאק|ברנדי)\b/.test(source)) return "brandy";
+    if (/\b(beer|בירה)\b/.test(source)) return "beer";
+    if (/\b(wine|vino|vin|יין)\b/.test(source)) return "wine";
+    return undefined;
+  }
+
+  private detectWineColor(text: string): string | undefined {
+    const source = String(text || "").toLowerCase();
+    if (!source.trim()) return undefined;
+    if (/(?:\bred\b|אדום|rosso|tinto|rouge)/.test(source)) return "red";
+    if (/(?:\bwhite\b|לבן|bianco|blanco|blanc)/.test(source)) return "white";
+    if (/(?:\bros[eé]\b|רוזה|pink)/.test(source)) return "rose";
+    if (/(?:\bsparkling\b|שמפניה|מבעבע|prosecco|cava)/.test(source)) return "sparkling";
+    return undefined;
   }
 
   private async progress(

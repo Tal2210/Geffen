@@ -43,6 +43,8 @@ const CATEGORY_PRESET_FIELDS: Record<
     { key: "sole", label: "Sole" },
   ],
   wine: [
+    { key: "product_category", label: "Drink Type" },
+    { key: "wine_color", label: "Wine Color" },
     { key: "country", label: "Country" },
     { key: "grape", label: "Grape Variety" },
     { key: "volume", label: "Bottle Size" },
@@ -784,6 +786,44 @@ export class ScraperOrchestratorService {
     if (!value) return {};
     const lower = value.toLowerCase();
     const out: Record<string, string> = {};
+
+    const beverageType =
+      /\b(whisky|whiskey|וויסקי)\b/.test(lower)
+        ? "whiskey"
+        : /\b(gin|ג׳ין|גין)\b/.test(lower)
+          ? "gin"
+          : /\b(vodka|וודקה)\b/.test(lower)
+            ? "vodka"
+            : /\b(rum|רום)\b/.test(lower)
+              ? "rum"
+              : /\b(tequila|טקילה)\b/.test(lower)
+                ? "tequila"
+                : /\b(liqueur|ליקר)\b/.test(lower)
+                  ? "liqueur"
+                  : /\b(brandy|קוניאק|ברנדי)\b/.test(lower)
+                    ? "brandy"
+                    : /\b(beer|בירה)\b/.test(lower)
+                      ? "beer"
+                      : /\b(wine|vino|vin|יין)\b/.test(lower)
+                        ? "wine"
+                        : undefined;
+    if (beverageType) {
+      out.product_category = beverageType;
+    }
+
+    const wineColor =
+      /(?:\bred\b|אדום|rosso|tinto|rouge)/.test(lower)
+        ? "red"
+        : /(?:\bwhite\b|לבן|bianco|blanco|blanc)/.test(lower)
+          ? "white"
+          : /(?:\bros[eé]\b|רוזה|pink)/.test(lower)
+            ? "rose"
+            : /(?:\bsparkling\b|שמפניה|מבעבע|prosecco|cava)/.test(lower)
+              ? "sparkling"
+              : undefined;
+    if (wineColor) {
+      out.wine_color = wineColor;
+    }
 
     const volumeMatch = value.match(/(\d{3,4})\s?(ml|מ\"ל|מל|cc)|(\d(?:\.\d)?)\s?(l|ליטר|ל')/i);
     if (volumeMatch) {

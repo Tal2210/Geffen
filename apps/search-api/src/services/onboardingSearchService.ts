@@ -531,6 +531,12 @@ export class OnboardingSearchService {
     const sweetnessTokens = (filters.sweetness || [])
       .map((value) => this.normalizeForTextSearch(String(value || "")))
       .filter(Boolean);
+    const requestedTypes = (filters.type || [])
+      .map((value) => this.normalizeRequestedType(value))
+      .filter((value): value is string => Boolean(value));
+    const requestedColors = (filters.category || [])
+      .map((value) => this.normalizeRequestedColor(value))
+      .filter((value): value is string => Boolean(value));
 
     const requiresWineScope =
       demoCategory === "wine" ||
@@ -543,19 +549,26 @@ export class OnboardingSearchService {
     return products.filter((product) => {
       const haystack = this.buildProductHaystack(product);
       if (!haystack) return false;
+      const taxonomy = this.extractProductTaxonomy(product, haystack);
 
-      if (requiresWineScope && !this.looksLikeWineProduct(haystack)) {
+      if (requiresWineScope && !taxonomy.beverageTypes.has("wine") && !this.looksLikeWineProduct(haystack)) {
         return false;
       }
 
-      if (typeTokens.length > 0) {
-        const matchesType = typeTokens.some((token) => haystack.includes(token));
-        if (!matchesType) return false;
+      if (requestedTypes.length > 0) {
+        const matchesCanonicalType = requestedTypes.some((type) => taxonomy.beverageTypes.has(type));
+        if (!matchesCanonicalType) {
+          const matchesTypeToken = typeTokens.some((token) => haystack.includes(token));
+          if (!matchesTypeToken) return false;
+        }
       }
 
-      if (colorTokens.length > 0) {
-        const matchesColor = colorTokens.some((token) => haystack.includes(token));
-        if (!matchesColor) return false;
+      if (requestedColors.length > 0) {
+        const matchesCanonicalColor = requestedColors.some((color) => taxonomy.wineColors.has(color));
+        if (!matchesCanonicalColor) {
+          const matchesColorToken = colorTokens.some((token) => haystack.includes(token));
+          if (!matchesColorToken) return false;
+        }
       }
 
       if (countryTokens.length > 0) {
@@ -620,6 +633,59 @@ export class OnboardingSearchService {
       return true;
     }
     return false;
+  }
+
+  private normalizeRequestedType(value: string): string | undefined {
+    const token = this.normalizeForTextSearch(value);
+    if (!token) return undefined;
+    if (/(wine|יין)/.test(token)) return "wine";
+    if (/(whisky|whiskey|וויסקי)/.test(token)) return "whiskey";
+    if (/(gin|ג׳ין|גין)/.test(token)) return "gin";
+    if (/(vodka|וודקה)/.test(token)) return "vodka";
+    if (/(beer|בירה)/.test(token)) return "beer";
+    if (/(rum|רום)/.test(token)) return "rum";
+    if (/(tequila|טקילה)/.test(token)) return "tequila";
+    if (/(liqueur|ליקר)/.test(token)) return "liqueur";
+    if (/(brandy|קוניאק|ברנדי)/.test(token)) return "brandy";
+    if (/(soda|soft drink|משקאות קלים)/.test(token)) return "soda";
+    return undefined;
+  }
+
+  private normalizeRequestedColor(value: string): string | undefined {
+    const token = this.normalizeForTextSearch(value);
+    if (!token) return undefined;
+    if (/(red|אדום|rosso|tinto|rouge)/.test(token)) return "red";
+    if (/(white|לבן|blanco|blanc|bianco)/.test(token)) return "white";
+    if (/(rose|rosé|רוזה|pink)/.test(token)) return "rose";
+    if (/(sparkling|מבעבע|champagne|prosecco|cava)/.test(token)) return "sparkling";
+    return undefined;
+  }
+
+  private extractProductTaxonomy(
+    product: OnboardingIndexedProduct,
+    haystack: string
+  ): { beverageTypes: Set<string>; wineColors: Set<string> } {
+    const beverageTypes = new Set<string>();
+    const wineColors = new Set<string>();
+
+    const raw = (product.raw || {}) as Record<string, unknown>;
+    const attributes =
+      raw.attributes && typeof raw.attributes === "object"
+        ? (raw.attributes as Record<string, unknown>)
+        : {};
+
+    const rawType = this.normalizeRequestedType(String(attributes.product_category || attributes.beverage_type || ""));
+    if (rawType) beverageTypes.add(rawType);
+    const rawColor = this.normalizeRequestedColor(String(attributes.wine_color || ""));
+    if (rawColor) wineColors.add(rawColor);
+
+    const inferredType = this.normalizeRequestedType(haystack);
+    if (inferredType) beverageTypes.add(inferredType);
+
+    const inferredColor = this.normalizeRequestedColor(haystack);
+    if (inferredColor) wineColors.add(inferredColor);
+
+    return { beverageTypes, wineColors };
   }
 
   private toProduct(doc: OnboardingProductDoc): OnboardingIndexedProduct {
