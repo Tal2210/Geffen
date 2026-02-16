@@ -93,8 +93,17 @@ export class OnboardingWorker {
       throw new Error(discovery.robotsReason || "robots_disallowed");
     }
 
+    const assistTemplate = await this.onboardingService
+      .getAssistTemplateForWebsite(job.websiteUrl)
+      .catch(() => null);
+
     await this.progress(job.jobId, "extract", 26, "Extracting public products");
-    const scraped = await this.scraper.extractProducts(discovery, job.category, 50);
+    const scraped = await this.scraper.extractProducts(
+      discovery,
+      job.category,
+      50,
+      assistTemplate || undefined
+    );
     if (scraped.products.length === 0) {
       throw new Error("scrape_no_products");
     }

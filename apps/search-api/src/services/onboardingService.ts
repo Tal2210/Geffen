@@ -16,6 +16,36 @@ import type {
 } from "../types/index.js";
 import { OnboardingSearchService } from "./onboardingSearchService.js";
 
+export interface OnboardingAssistSelector {
+  selector: string;
+  mode: "text" | "src";
+}
+
+export interface OnboardingAssistTemplate {
+  websiteUrl: string;
+  productUrl: string;
+  selectors: {
+    name: OnboardingAssistSelector;
+    price?: OnboardingAssistSelector;
+    image?: OnboardingAssistSelector;
+    description?: OnboardingAssistSelector;
+    inStock?: OnboardingAssistSelector;
+  };
+}
+
+export interface OnboardingAssistRuntimeTemplate {
+  domain: string;
+  websiteUrl: string;
+  sampleProductUrl: string;
+  selectors: {
+    name: OnboardingAssistSelector;
+    price?: OnboardingAssistSelector;
+    image?: OnboardingAssistSelector;
+    description?: OnboardingAssistSelector;
+    inStock?: OnboardingAssistSelector;
+  };
+}
+
 interface OnboardingJobDoc {
   jobId: string;
   websiteUrl: string;
@@ -69,6 +99,22 @@ interface OnboardingTrackDoc {
   expiresAt: string;
 }
 
+interface OnboardingAssistTemplateDoc {
+  domain: string;
+  websiteUrl: string;
+  sampleProductUrl: string;
+  selectors: {
+    name: OnboardingAssistSelector;
+    price?: OnboardingAssistSelector;
+    image?: OnboardingAssistSelector;
+    description?: OnboardingAssistSelector;
+    inStock?: OnboardingAssistSelector;
+  };
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+}
+
 export class OnboardingService {
   private client: MongoClient;
   private db!: Db;
@@ -76,6 +122,7 @@ export class OnboardingService {
   private demos!: Collection<OnboardingDemoDoc>;
   private products!: Collection<OnboardingProductDoc>;
   private track!: Collection<OnboardingTrackDoc>;
+  private templates!: Collection<OnboardingAssistTemplateDoc>;
   private searchService: OnboardingSearchService;
 
   private readonly tokenSecret: string;
@@ -103,6 +150,7 @@ export class OnboardingService {
     this.demos = this.db.collection<OnboardingDemoDoc>("onboarding.demos");
     this.products = this.db.collection<OnboardingProductDoc>("onboarding.products");
     this.track = this.db.collection<OnboardingTrackDoc>("onboarding.track");
+    this.templates = this.db.collection<OnboardingAssistTemplateDoc>("onboarding.templates");
 
     await this.ensureIndexes();
   }
@@ -377,6 +425,115 @@ export class OnboardingService {
     await this.track.insertOne(doc);
   }
 
+  async getAssistPreview(productUrl: string): Promise<{
+    normalizedUrl: string;
+    baseUrl: string;
+    html: string;
+  }> {
+    const normalizedUrl = this.normalizeWebsiteUrl(productUrl);
+    this.assertPublicUrlSafe(normalizedUrl);
+    const html = await this.fetchHtmlPreview(normalizedUrl);
+    if (!html) {
+      throw new Error("assist_preview_unavailable");
+    }
+    const baseUrl = new URL(normalizedUrl).origin;
+    return {
+      normalizedUrl,
+      baseUrl,
+      html,
+    };
+  }
+
+  async saveAssistTemplate(input: OnboardingAssistTemplate): Promise<{ saved: true; domain: string }> {
+    const websiteUrl = this.normalizeWebsiteUrl(input.websiteUrl);
+    const productUrl = this.normalizeWebsiteUrl(input.productUrl);
+    this.assertPublicUrlSafe(websiteUrl);
+    this.assertPublicUrlSafe(productUrl);
+
+    const websiteDomain = new URL(websiteUrl).hostname.toLowerCase();
+    const productDomain = new URL(productUrl).hostname.toLowerCase();
+    if (websiteDomain !== productDomain) {
+      throw new Error("invalid_request");
+    }
+
+    const nameSelector = String(input.selectors?.name?.selector || "").trim();
+    if (!nameSelector) {
+      throw new Error("invalid_request");
+    }
+
+    const now = new Date();
+    const expiresAt = this.makeExpiry(now, Math.max(this.demoTtlDays * 4, 30));
+    const selectors: OnboardingAssistTemplateDoc["selectors"] = {
+      name: {
+        selector: nameSelector,
+        mode: input.selectors.name.mode === "src" ? "src" : "text",
+      },
+    };
+
+    if (input.selectors.price?.selector) {
+      selectors.price = {
+        selector: String(input.selectors.price.selector).trim(),
+        mode: "text",
+      };
+    }
+    if (input.selectors.image?.selector) {
+      selectors.image = {
+        selector: String(input.selectors.image.selector).trim(),
+        mode: input.selectors.image.mode === "src" ? "src" : "text",
+      };
+    }
+    if (input.selectors.description?.selector) {
+      selectors.description = {
+        selector: String(input.selectors.description.selector).trim(),
+        mode: "text",
+      };
+    }
+    if (input.selectors.inStock?.selector) {
+      selectors.inStock = {
+        selector: String(input.selectors.inStock.selector).trim(),
+        mode: "text",
+      };
+    }
+
+    await this.templates.updateOne(
+      { domain: websiteDomain },
+      {
+        $set: {
+          domain: websiteDomain,
+          websiteUrl,
+          sampleProductUrl: productUrl,
+          selectors,
+          updatedAt: now.toISOString(),
+          expiresAt,
+        },
+        $setOnInsert: {
+          createdAt: now.toISOString(),
+        },
+      },
+      { upsert: true }
+    );
+
+    return { saved: true, domain: websiteDomain };
+  }
+
+  async getAssistTemplateForWebsite(websiteUrl: string): Promise<OnboardingAssistRuntimeTemplate | null> {
+    const normalizedUrl = this.normalizeWebsiteUrl(websiteUrl);
+    this.assertPublicUrlSafe(normalizedUrl);
+    const domain = new URL(normalizedUrl).hostname.toLowerCase();
+    const nowIso = new Date().toISOString();
+    const doc = await this.templates.findOne({
+      domain,
+      expiresAt: { $gt: nowIso },
+    });
+    if (!doc) return null;
+    return {
+      domain: doc.domain,
+      websiteUrl: doc.websiteUrl,
+      sampleProductUrl: doc.sampleProductUrl,
+      selectors: doc.selectors,
+    };
+  }
+
   async getWorkerHealth(): Promise<{
     queueSize: number;
     runningCount: number;
@@ -518,6 +675,29 @@ export class OnboardingService {
     return copy.toISOString();
   }
 
+  private async fetchHtmlPreview(url: string): Promise<string> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      });
+      if (!response.ok) return "";
+      const html = await response.text();
+      // Keep payload bounded for preview transport.
+      return html.slice(0, 1_000_000);
+    } catch {
+      return "";
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async ensureIndexes(): Promise<void> {
     await Promise.all([
       this.jobs.createIndex({ status: 1, createdAt: 1 }),
@@ -537,6 +717,9 @@ export class OnboardingService {
 
       this.track.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       this.track.createIndex({ event: 1, createdAt: -1 }),
+
+      this.templates.createIndex({ domain: 1 }, { unique: true }),
+      this.templates.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
 
     await this.ensureVectorIndexBestEffort();

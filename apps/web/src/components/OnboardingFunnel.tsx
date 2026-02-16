@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { OnboardingAssistTrainer } from "./OnboardingAssistTrainer";
 
 interface CategoryOption {
   value: string;
@@ -233,6 +234,8 @@ export function OnboardingFunnel() {
                 ))}
               </select>
             </label>
+
+            <OnboardingAssistTrainer apiUrl={API_URL} websiteUrl={websiteUrl} />
 
             <button
               type="button"

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
 import {
   OnboardingDemoSearchRequestSchema,
   OnboardingStartRequestSchema,
@@ -13,10 +14,71 @@ export function createOnboardingRoutes(
   onboardingWorker: OnboardingWorker
 ): FastifyPluginAsync {
   return async (server) => {
+    const AssistPreviewRequestSchema = z.object({
+      productUrl: z.string().url().max(2048),
+    });
+
+    const AssistSelectorSchema = z.object({
+      selector: z.string().min(1).max(400),
+      mode: z.enum(["text", "src"]).default("text"),
+    });
+
+    const AssistTemplateRequestSchema = z.object({
+      websiteUrl: z.string().url().max(2048),
+      productUrl: z.string().url().max(2048),
+      selectors: z.object({
+        name: AssistSelectorSchema,
+        price: AssistSelectorSchema.optional(),
+        image: AssistSelectorSchema.optional(),
+        description: AssistSelectorSchema.optional(),
+        inStock: AssistSelectorSchema.optional(),
+      }),
+    });
+
     server.get("/onboarding/categories", async () => {
       return {
         categories: onboardingService.listCategories(),
       };
+    });
+
+    server.post("/onboarding/assist/preview", async (request, reply) => {
+      const parsed = AssistPreviewRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const preview = await onboardingService.getAssistPreview(parsed.data.productUrl);
+        return reply.send(preview);
+      } catch {
+        return reply.status(422).send({
+          error: "assist_preview_unavailable",
+          message: "Could not load this product page preview. Please try another URL.",
+        });
+      }
+    });
+
+    server.post("/onboarding/assist/template", async (request, reply) => {
+      const parsed = AssistTemplateRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "invalid_request",
+          issues: parsed.error.issues,
+        });
+      }
+
+      try {
+        const result = await onboardingService.saveAssistTemplate(parsed.data);
+        return reply.status(202).send(result);
+      } catch {
+        return reply.status(400).send({
+          error: "invalid_request",
+          message: "Could not save scraper assistance template.",
+        });
+      }
     });
 
     server.post("/onboarding/start", async (request, reply) => {

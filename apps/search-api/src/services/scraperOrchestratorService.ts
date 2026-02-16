@@ -1,4 +1,8 @@
 import type { OnboardingCategory } from "../types/index.js";
+import type {
+  OnboardingAssistRuntimeTemplate,
+  OnboardingAssistSelector,
+} from "./onboardingService.js";
 import { ShopifyAdapter } from "./platformAdapters/shopifyAdapter.js";
 import { WooCommerceAdapter } from "./platformAdapters/woocommerceAdapter.js";
 import type { ScrapedProduct } from "./platformAdapters/types.js";
@@ -50,7 +54,8 @@ export class ScraperOrchestratorService {
   async extractProducts(
     discovery: ScraperDiscovery,
     category: OnboardingCategory,
-    limit = 50
+    limit = 50,
+    assistTemplate?: OnboardingAssistRuntimeTemplate
   ): Promise<ScraperResult> {
     const capped = Math.max(1, Math.min(limit, 50));
     const sources: ScrapedProduct[] = [];
@@ -73,6 +78,13 @@ export class ScraperOrchestratorService {
       if (browserProducts.length > 0) {
         usedBrowserFallback = true;
         sources.push(...browserProducts);
+      }
+    }
+
+    if (assistTemplate && sources.length < Math.min(20, capped)) {
+      const assisted = await this.extractWithAssistTemplate(discovery, assistTemplate, capped);
+      if (assisted.length > 0) {
+        sources.push(...assisted);
       }
     }
 
@@ -392,6 +404,277 @@ export class ScraperOrchestratorService {
     } finally {
       await browser.close();
     }
+  }
+
+  private async extractWithAssistTemplate(
+    discovery: ScraperDiscovery,
+    template: OnboardingAssistRuntimeTemplate,
+    limit: number
+  ): Promise<ScrapedProduct[]> {
+    const urls = await this.discoverProductUrls(discovery, template.sampleProductUrl, limit);
+    if (!urls.length) return [];
+
+    const out: ScrapedProduct[] = [];
+    for (const url of urls) {
+      const html = await this.fetchText(url).catch(() => "");
+      if (!html) continue;
+
+      const name = this.extractFieldByAssistSelector(html, template.selectors.name, "text");
+      if (!name) continue;
+
+      const description = template.selectors.description
+        ? this.extractFieldByAssistSelector(html, template.selectors.description, "text")
+        : undefined;
+      const imageUrlRaw = template.selectors.image
+        ? this.extractFieldByAssistSelector(html, template.selectors.image, "src")
+        : "";
+      const imageUrl = this.toAbsoluteUrl(imageUrlRaw || "", discovery.origin);
+
+      const priceRaw = template.selectors.price
+        ? this.extractFieldByAssistSelector(html, template.selectors.price, "text")
+        : "";
+      const price =
+        this.parsePriceLoose(priceRaw || "") ??
+        this.parsePriceLoose(
+          html.match(/(?:price|amount|product:price:amount|data-price)=["']([^"']+)["']/i)?.[1] || ""
+        );
+
+      const stockRaw = template.selectors.inStock
+        ? this.extractFieldByAssistSelector(html, template.selectors.inStock, "text")
+        : "";
+      const inStock = this.parseInStock(stockRaw || html);
+
+      if (!name || (!price && !description && !imageUrl)) continue;
+
+      out.push({
+        name,
+        description: description || undefined,
+        price: Number.isFinite(Number(price)) ? Number(price) : undefined,
+        currency: this.detectCurrencyFromHtml(html),
+        imageUrl: imageUrl || undefined,
+        productUrl: url,
+        inStock,
+        source: "generic_static",
+      });
+
+      if (out.length >= Math.max(limit * 2, 80)) break;
+    }
+
+    return out;
+  }
+
+  private async discoverProductUrls(
+    discovery: ScraperDiscovery,
+    sampleProductUrl: string,
+    limit: number
+  ): Promise<string[]> {
+    const maxUrls = Math.max(limit * 3, 120);
+    const urls = new Set<string>();
+    const origin = discovery.origin;
+
+    const tryAdd = (raw: string | undefined) => {
+      const abs = this.toAbsoluteUrl(raw || "", origin);
+      if (!abs) return;
+      try {
+        const parsed = new URL(abs);
+        if (parsed.origin !== origin) return;
+        if (!this.looksLikeProductUrl(parsed.toString())) return;
+        urls.add(parsed.toString());
+      } catch {
+        // ignore invalid
+      }
+    };
+
+    tryAdd(sampleProductUrl);
+
+    const sitemap = await this.fetchText(`${origin.replace(/\/$/, "")}/sitemap.xml`).catch(() => "");
+    if (sitemap) {
+      const locRegex = /<loc>\s*([^<]+)\s*<\/loc>/gi;
+      let match: RegExpExecArray | null;
+      while ((match = locRegex.exec(sitemap))) {
+        tryAdd(String(match[1] || ""));
+        if (urls.size >= maxUrls) break;
+      }
+    }
+
+    const candidatePages = [
+      discovery.normalizedUrl,
+      `${origin}/collections/all`,
+      `${origin}/collections`,
+      `${origin}/shop`,
+      `${origin}/products`,
+      `${origin}/catalog`,
+    ];
+    for (const pageUrl of candidatePages) {
+      if (urls.size >= maxUrls) break;
+      const html =
+        pageUrl === discovery.normalizedUrl && discovery.homepageHtml
+          ? discovery.homepageHtml
+          : await this.fetchText(pageUrl).catch(() => "");
+      if (!html) continue;
+
+      const anchorRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>/gi;
+      let match: RegExpExecArray | null;
+      while ((match = anchorRegex.exec(html))) {
+        tryAdd(String(match[1] || ""));
+        if (urls.size >= maxUrls) break;
+      }
+    }
+
+    return Array.from(urls).slice(0, maxUrls);
+  }
+
+  private extractFieldByAssistSelector(
+    html: string,
+    selector: OnboardingAssistSelector,
+    expectedMode: "text" | "src"
+  ): string {
+    const mode = selector.mode === "src" ? "src" : "text";
+    const desired = expectedMode === "src" ? "src" : mode;
+    const token = this.resolveCandidateSelector(selector.selector);
+    if (!token) return "";
+    const element = this.findElementBySimpleSelector(html, token);
+    if (!element) return "";
+
+    if (desired === "src") {
+      const src = element.attributes.src || element.attributes["data-src"] || element.attributes.content;
+      return String(src || "").trim();
+    }
+
+    const textFromAttr = element.attributes.content || element.attributes["aria-label"];
+    const text = this.stripHtml(textFromAttr || element.innerHtml || "");
+    return text.slice(0, 1500);
+  }
+
+  private resolveCandidateSelector(selector: string): string {
+    const raw = String(selector || "").trim();
+    if (!raw) return "";
+    const tokens = raw.split(/[\s>+~]+/).filter(Boolean);
+    const token = tokens[tokens.length - 1] || raw;
+    return token.trim();
+  }
+
+  private findElementBySimpleSelector(
+    html: string,
+    selectorToken: string
+  ): { tag: string; attributes: Record<string, string>; innerHtml: string } | null {
+    const selector = String(selectorToken || "").trim();
+    if (!selector) return null;
+
+    const criteria = this.parseSimpleSelector(selector);
+    if (!criteria) return null;
+
+    const openTagRegex = /<([a-zA-Z0-9:-]+)([^>]*)>/g;
+    let match: RegExpExecArray | null;
+    while ((match = openTagRegex.exec(html))) {
+      const tag = String(match[1] || "").toLowerCase();
+      const attrsRaw = String(match[2] || "");
+      if (!tag || ["script", "style", "noscript"].includes(tag)) continue;
+
+      const attributes = this.parseAttributesFromTag(attrsRaw);
+      if (!this.selectorMatches(tag, attributes, criteria)) continue;
+
+      const start = match.index + match[0].length;
+      const closeTag = `</${tag}>`;
+      const end = html.indexOf(closeTag, start);
+      const innerHtml = end >= 0 ? html.slice(start, end) : "";
+      return { tag, attributes, innerHtml };
+    }
+
+    return null;
+  }
+
+  private parseSimpleSelector(selector: string): null | {
+    tag?: string;
+    id?: string;
+    className?: string;
+    attrName?: string;
+    attrValue?: string;
+  } {
+    const value = String(selector || "").trim();
+    if (!value) return null;
+
+    if (value.startsWith("#")) {
+      return { id: value.slice(1) };
+    }
+    if (value.startsWith(".")) {
+      return { className: value.slice(1) };
+    }
+
+    const attrMatch = value.match(/^\[([a-zA-Z0-9:_-]+)(?:=["']?([^"'\]]+)["']?)?\]$/);
+    if (attrMatch) {
+      return {
+        attrName: String(attrMatch[1] || "").toLowerCase(),
+        attrValue: attrMatch[2] ? String(attrMatch[2]) : undefined,
+      };
+    }
+
+    const tagClassMatch = value.match(/^([a-zA-Z0-9:-]+)\.([a-zA-Z0-9_-]+)$/);
+    if (tagClassMatch) {
+      return {
+        tag: String(tagClassMatch[1] || "").toLowerCase(),
+        className: String(tagClassMatch[2] || ""),
+      };
+    }
+
+    const tagMatch = value.match(/^([a-zA-Z0-9:-]+)$/);
+    if (tagMatch) {
+      return {
+        tag: String(tagMatch[1] || "").toLowerCase(),
+      };
+    }
+
+    return null;
+  }
+
+  private parseAttributesFromTag(attrsRaw: string): Record<string, string> {
+    const attrs: Record<string, string> = {};
+    const regex = /([:@a-zA-Z0-9_-]+)(?:\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(attrsRaw))) {
+      const key = String(match[1] || "").toLowerCase();
+      if (!key) continue;
+      const value = String(match[3] || match[4] || match[5] || "").trim();
+      attrs[key] = value;
+    }
+    return attrs;
+  }
+
+  private selectorMatches(
+    tag: string,
+    attributes: Record<string, string>,
+    criteria: { tag?: string; id?: string; className?: string; attrName?: string; attrValue?: string }
+  ): boolean {
+    if (criteria.tag && tag !== criteria.tag) return false;
+    if (criteria.id) {
+      const id = String(attributes.id || "");
+      if (id !== criteria.id) return false;
+    }
+    if (criteria.className) {
+      const classes = String(attributes.class || "")
+        .split(/\s+/)
+        .filter(Boolean);
+      if (!classes.includes(criteria.className)) return false;
+    }
+    if (criteria.attrName) {
+      const attr = attributes[criteria.attrName];
+      if (typeof attr === "undefined") return false;
+      if (typeof criteria.attrValue === "string" && attr !== criteria.attrValue) return false;
+    }
+    return true;
+  }
+
+  private looksLikeProductUrl(url: string): boolean {
+    const value = String(url || "").toLowerCase();
+    return /\/(product|products|item|items|shop|wine|wines|sku|p)\b/.test(value);
+  }
+
+  private parseInStock(value: string): boolean | undefined {
+    const text = this.stripHtml(String(value || "")).toLowerCase();
+    if (!text) return undefined;
+    if (/(in stock|available|מלאי|זמין|instock)/.test(text)) return true;
+    if (/(out of stock|sold out|אזל|חסר|לא זמין|outofstock)/.test(text)) return false;
+    return undefined;
   }
 
   private flattenJsonLdNodes(value: any): Record<string, any>[] {
