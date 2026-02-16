@@ -61,12 +61,17 @@ interface JobStatusResponse {
   expiresAt: string;
 }
 
+type WizardStep = "details" | "guide" | "progress";
+
 export function OnboardingFunnel() {
   const navigate = useNavigate();
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [email, setEmail] = useState("");
   const [category, setCategory] = useState("wine");
   const [categories, setCategories] = useState<CategoryOption[]>(FALLBACK_CATEGORIES);
+  const [step, setStep] = useState<WizardStep>("details");
+  const [guidanceSaved, setGuidanceSaved] = useState(false);
+  const [guideProductUrl, setGuideProductUrl] = useState("");
   const [starting, setStarting] = useState(false);
   const [loadingCategories, setLoadingCategories] = useState(true);
   const [job, setJob] = useState<JobStatusResponse | null>(null);
@@ -100,7 +105,8 @@ export function OnboardingFunnel() {
     };
 
     void run();
-  }, [API_URL, category]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [API_URL]);
 
   useEffect(() => {
     if (!job || !["queued", "running"].includes(job.status)) {
@@ -131,6 +137,7 @@ export function OnboardingFunnel() {
   const start = async () => {
     setError(null);
     setStarting(true);
+    setStep("progress");
 
     try {
       const response = await fetch(`${API_URL}/onboarding/start`, {
@@ -149,6 +156,7 @@ export function OnboardingFunnel() {
       const started = payload as StartResponse;
       await pollJob(started.jobId);
     } catch (err) {
+      setStep("guide");
       setError(err instanceof Error ? err.message : "Failed to start onboarding");
     } finally {
       setStarting(false);
@@ -177,13 +185,35 @@ export function OnboardingFunnel() {
     }
   };
 
+  const goToGuide = () => {
+    if (!websiteUrl.trim() || !email.trim()) {
+      setError("Please fill website URL and email first.");
+      return;
+    }
+    setError(null);
+    setStep("guide");
+    if (!guideProductUrl.trim()) {
+      setGuideProductUrl(websiteUrl.trim());
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#fffdfd] px-6 py-8 text-slate-900 lg:px-10">
-      <div className="mx-auto max-w-4xl rounded-3xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
+      <div className="mx-auto max-w-5xl rounded-3xl border border-geffen-100 bg-white p-6 shadow-xl shadow-geffen-100/40">
         <h1 className="mb-2 text-2xl font-semibold text-slate-900">Build Your Semantic Demo</h1>
         <p className="mb-6 text-sm text-slate-500">
-          Enter your website, choose a category, and we will generate a semantic search demo from up to 50 public products.
+          Quick onboarding in 3 steps: add details, guide the scraper on one product page, then run scraping + indexing.
         </p>
+
+        <div className="mb-6 grid grid-cols-1 gap-2 md:grid-cols-3">
+          <StepBadge active={step === "details"} done={step !== "details"} label="1. Store Details" />
+          <StepBadge active={step === "guide"} done={step === "progress"} label="2. Guided Scraper" />
+          <StepBadge
+            active={step === "progress"}
+            done={Boolean(job && ["ready", "partial_ready"].includes(job.status))}
+            label="3. Scrape + Index"
+          />
+        </div>
 
         {error && (
           <div className="mb-5 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -191,7 +221,7 @@ export function OnboardingFunnel() {
           </div>
         )}
 
-        {!job && (
+        {step === "details" && (
           <div className="space-y-4">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
@@ -235,27 +265,72 @@ export function OnboardingFunnel() {
               </select>
             </label>
 
-            <OnboardingAssistTrainer apiUrl={API_URL} websiteUrl={websiteUrl} />
-
             <button
               type="button"
-              onClick={() => {
-                void start();
-              }}
-              disabled={starting || !websiteUrl.trim() || !email.trim()}
+              onClick={goToGuide}
+              disabled={!websiteUrl.trim() || !email.trim()}
               className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-6 text-sm font-semibold text-white transition hover:bg-geffen-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {starting ? "Starting..." : "Create Demo"}
+              Continue To Guided Scraper
             </button>
           </div>
         )}
 
-        {job && (
+        {step === "guide" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-geffen-100 bg-gradient-to-r from-geffen-50 to-white p-4">
+              <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Before We Scrape</p>
+              <p className="mt-1 text-sm text-slate-700">
+                Open one real product page from your store, then teach us where the important elements are. This improves extraction quality dramatically.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Domain: {websiteUrl || "-"}</span>
+                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Category: {category}</span>
+                <span className="rounded-full border border-geffen-200 bg-white px-3 py-1">Email: {email}</span>
+              </div>
+            </div>
+
+            <OnboardingAssistTrainer
+              apiUrl={API_URL}
+              websiteUrl={websiteUrl}
+              initialProductUrl={guideProductUrl}
+              onTemplateSaved={() => {
+                setGuidanceSaved(true);
+              }}
+            />
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setStep("details")}
+                className="h-11 rounded-xl border border-geffen-200 bg-white px-5 text-sm font-semibold text-geffen-700 hover:border-geffen-400"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void start();
+                }}
+                disabled={starting}
+                className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-5 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+              >
+                {starting
+                  ? "Starting..."
+                  : guidanceSaved
+                    ? "Start Scraping + Indexing (With Guidance)"
+                    : "Skip Guidance And Start Scraping"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "progress" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-geffen-100 bg-geffen-50/50 p-4">
               <p className="text-xs uppercase tracking-[0.12em] text-geffen-700">Status</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{job.status}</p>
-              <p className="mt-1 text-sm text-slate-600">{job.progress?.message || "Working..."}</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{job?.status || "queued"}</p>
+              <p className="mt-1 text-sm text-slate-600">{job?.progress?.message || "Working..."}</p>
             </div>
 
             <div>
@@ -271,14 +346,30 @@ export function OnboardingFunnel() {
               </div>
             </div>
 
-            {(job.status === "failed" || job.errorMessage) && (
+            {((job && job.status === "failed") || job?.errorMessage) && (
               <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
-                {job.errorMessage || "Onboarding failed"}
+                {job?.errorMessage || "Onboarding failed"}
               </div>
             )}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function StepBadge({ label, active, done }: { label: string; active: boolean; done: boolean }) {
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2 text-xs font-semibold ${
+        active
+          ? "border-geffen-600 bg-geffen-50 text-geffen-800"
+          : done
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-geffen-100 bg-white text-slate-500"
+      }`}
+    >
+      {label}
     </div>
   );
 }

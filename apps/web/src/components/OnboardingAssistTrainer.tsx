@@ -17,6 +17,8 @@ interface AssistPreviewResponse {
 interface Props {
   apiUrl: string;
   websiteUrl: string;
+  initialProductUrl?: string;
+  onTemplateSaved?: () => void;
 }
 
 const FIELD_CONFIG: Array<{
@@ -32,9 +34,13 @@ const FIELD_CONFIG: Array<{
   { key: "inStock", label: "Stock Status", defaultMode: "text" },
 ];
 
-export function OnboardingAssistTrainer({ apiUrl, websiteUrl }: Props) {
-  const [open, setOpen] = useState(false);
-  const [productUrl, setProductUrl] = useState("");
+export function OnboardingAssistTrainer({
+  apiUrl,
+  websiteUrl,
+  initialProductUrl,
+  onTemplateSaved,
+}: Props) {
+  const [productUrl, setProductUrl] = useState(initialProductUrl || "");
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewBaseUrl, setPreviewBaseUrl] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -78,6 +84,12 @@ export function OnboardingAssistTrainer({ apiUrl, websiteUrl }: Props) {
       window.removeEventListener("message", onMessage);
     };
   }, [activeField]);
+
+  useEffect(() => {
+    if (initialProductUrl) {
+      setProductUrl(initialProductUrl);
+    }
+  }, [initialProductUrl]);
 
   const srcDoc = useMemo(() => {
     if (!previewHtml) return "";
@@ -153,6 +165,7 @@ export function OnboardingAssistTrainer({ apiUrl, websiteUrl }: Props) {
       }
 
       setSuccess("Saved. The next onboarding run will use your selectors as guided scraping hints.");
+      onTemplateSaved?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed saving template");
     } finally {
@@ -162,125 +175,125 @@ export function OnboardingAssistTrainer({ apiUrl, websiteUrl }: Props) {
 
   return (
     <section className="rounded-2xl border border-geffen-100 bg-geffen-50/40 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-            Optional Scraper Guidance
-          </p>
-          <p className="mt-1 text-sm text-slate-600">
-            If your site is hard to scrape, help the system once by clicking key elements on one product page.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpen((prev) => !prev)}
-          className="rounded-full border border-geffen-200 bg-white px-3 py-1.5 text-xs font-semibold text-geffen-700 hover:border-geffen-400 hover:bg-geffen-50"
-        >
-          {open ? "Hide" : "Open"}
-        </button>
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+          Guided Scraper Setup
+        </p>
+        <p className="mt-1 text-sm text-slate-600">
+          Open one real product page, then click the exact elements so the scraper learns your store structure.
+        </p>
       </div>
+      <div className="mt-4 space-y-4">
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+            Sample Product URL
+          </span>
+          <div className="flex flex-col gap-2 md:flex-row">
+            <input
+              value={productUrl}
+              onChange={(e) => setProductUrl(e.target.value)}
+              placeholder="https://your-store.com/products/example"
+              className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
+            />
+            <a
+              href={productUrl.trim() ? normalizeHttpUrl(productUrl) : undefined}
+              target="_blank"
+              rel="noreferrer"
+              className={`inline-flex h-11 items-center justify-center rounded-xl border px-4 text-sm font-semibold ${
+                productUrl.trim()
+                  ? "border-geffen-300 bg-white text-geffen-700 hover:border-geffen-500"
+                  : "pointer-events-none border-geffen-100 bg-geffen-50 text-geffen-400"
+              }`}
+            >
+              Open product page
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                void loadPreview();
+              }}
+              disabled={loadingPreview || !productUrl.trim()}
+              className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-4 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+            >
+              {loadingPreview ? "Loading..." : "Activate Guided Scraper"}
+            </button>
+          </div>
+        </label>
 
-      {open && (
-        <div className="mt-4 space-y-4">
-          <label className="block">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-              Sample Product URL
-            </span>
-            <div className="flex gap-2">
-              <input
-                value={productUrl}
-                onChange={(e) => setProductUrl(e.target.value)}
-                placeholder="https://your-store.com/products/example"
-                className="h-11 w-full rounded-xl border border-geffen-200 px-3 text-sm outline-none focus:border-geffen-400"
-              />
+        {error && (
+          <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {success}
+          </div>
+        )}
+
+        {previewHtml && (
+          <div className="grid gap-4 lg:grid-cols-[300px,1fr]">
+            <div className="space-y-3 rounded-xl border border-geffen-100 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
+                Click The Right Elements
+              </p>
+              <p className="text-xs text-slate-500">
+                Select a field, then click it inside the preview.
+              </p>
+              <div className="space-y-2">
+                {FIELD_CONFIG.map((field) => {
+                  const selected = selectors[field.key];
+                  return (
+                    <button
+                      key={field.key}
+                      type="button"
+                      onClick={() => setActiveField(field.key)}
+                      className={`w-full rounded-lg border px-3 py-2 text-left text-xs ${
+                        activeField === field.key
+                          ? "border-geffen-500 bg-geffen-50 text-geffen-800"
+                          : "border-geffen-100 bg-white text-slate-700 hover:border-geffen-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span>
+                          {field.label} {field.required ? "*" : ""}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-[0.08em]">
+                          {selected?.selector ? "captured" : "pending"}
+                        </span>
+                      </div>
+                      {selected?.selector && (
+                        <p className="mt-1 truncate text-[11px] text-slate-500">{selected.selector}</p>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
-                  void loadPreview();
+                  void saveTemplate();
                 }}
-                disabled={loadingPreview || !productUrl.trim()}
-                className="h-11 rounded-xl border border-geffen-600 bg-geffen-600 px-4 text-sm font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
+                disabled={!canSave || saving}
+                className="h-10 w-full rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
               >
-                {loadingPreview ? "Loading..." : "Load"}
+                {saving ? "Saving..." : "Save Guidance Template"}
               </button>
             </div>
-          </label>
 
-          {error && (
-            <div className="rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
-              {error}
+            <div className="rounded-xl border border-geffen-100 bg-white p-2">
+              <iframe
+                title="Product page preview"
+                srcDoc={srcDoc}
+                className="h-[620px] w-full rounded-lg border border-geffen-100"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+              />
             </div>
-          )}
-
-          {success && (
-            <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              {success}
-            </div>
-          )}
-
-          {previewHtml && (
-            <div className="grid gap-4 lg:grid-cols-[300px,1fr]">
-              <div className="space-y-3 rounded-xl border border-geffen-100 bg-white p-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-geffen-700">
-                  Step By Step
-                </p>
-                <p className="text-xs text-slate-500">
-                  Choose a field, then click the matching element inside the preview.
-                </p>
-                <div className="space-y-2">
-                  {FIELD_CONFIG.map((field) => {
-                    const selected = selectors[field.key];
-                    return (
-                      <button
-                        key={field.key}
-                        type="button"
-                        onClick={() => setActiveField(field.key)}
-                        className={`w-full rounded-lg border px-3 py-2 text-left text-xs ${
-                          activeField === field.key
-                            ? "border-geffen-500 bg-geffen-50 text-geffen-800"
-                            : "border-geffen-100 bg-white text-slate-700 hover:border-geffen-300"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span>
-                            {field.label} {field.required ? "*" : ""}
-                          </span>
-                          <span className="text-[10px] uppercase tracking-[0.08em]">
-                            {selected?.selector ? "captured" : "pending"}
-                          </span>
-                        </div>
-                        {selected?.selector && (
-                          <p className="mt-1 truncate text-[11px] text-slate-500">{selected.selector}</p>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    void saveTemplate();
-                  }}
-                  disabled={!canSave || saving}
-                  className="h-10 w-full rounded-lg border border-geffen-600 bg-geffen-600 px-4 text-xs font-semibold text-white hover:bg-geffen-700 disabled:opacity-60"
-                >
-                  {saving ? "Saving..." : "Save Guidance Template"}
-                </button>
-              </div>
-
-              <div className="rounded-xl border border-geffen-100 bg-white p-2">
-                <iframe
-                  title="Product page preview"
-                  srcDoc={srcDoc}
-                  className="h-[620px] w-full rounded-lg border border-geffen-100"
-                  sandbox="allow-scripts allow-same-origin allow-forms"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
