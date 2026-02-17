@@ -334,6 +334,7 @@ export interface OnboardingDemoSearchResult {
 export interface OnboardingAssistSelector {
   selector: string;
   mode: "text" | "src";
+  sampleText?: string;
 }
 
 export interface OnboardingAssistCustomField {

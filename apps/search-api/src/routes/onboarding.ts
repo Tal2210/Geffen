@@ -25,6 +25,7 @@ export function createOnboardingRoutes(
     const AssistSelectorSchema = z.object({
       selector: z.string().min(1).max(400),
       mode: z.enum(["text", "src"]).default("text"),
+      sampleText: z.string().max(240).optional(),
     });
 
     const AssistCustomFieldSchema = z.object({

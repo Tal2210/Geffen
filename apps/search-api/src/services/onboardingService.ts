@@ -549,6 +549,7 @@ export class OnboardingService {
       name: {
         selector: nameSelector,
         mode: input.selectors.name.mode === "src" ? "src" : "text",
+        sampleText: String(input.selectors.name.sampleText || "").trim().slice(0, 240) || undefined,
       },
     };
 
@@ -556,24 +557,29 @@ export class OnboardingService {
       selectors.price = {
         selector: String(input.selectors.price.selector).trim(),
         mode: "text",
+        sampleText: String(input.selectors.price.sampleText || "").trim().slice(0, 240) || undefined,
       };
     }
     if (input.selectors.image?.selector) {
       selectors.image = {
         selector: String(input.selectors.image.selector).trim(),
         mode: input.selectors.image.mode === "src" ? "src" : "text",
+        sampleText: String(input.selectors.image.sampleText || "").trim().slice(0, 240) || undefined,
       };
     }
     if (input.selectors.description?.selector) {
       selectors.description = {
         selector: String(input.selectors.description.selector).trim(),
         mode: "text",
+        sampleText:
+          String(input.selectors.description.sampleText || "").trim().slice(0, 240) || undefined,
       };
     }
     if (input.selectors.inStock?.selector) {
       selectors.inStock = {
         selector: String(input.selectors.inStock.selector).trim(),
         mode: "text",
+        sampleText: String(input.selectors.inStock.sampleText || "").trim().slice(0, 240) || undefined,
       };
     }
 
@@ -585,6 +591,7 @@ export class OnboardingService {
             selector: {
               selector: String(field.selector?.selector || "").trim().slice(0, 400),
               mode: (field.selector?.mode === "src" ? "src" : "text") as "text" | "src",
+              sampleText: String(field.selector?.sampleText || "").trim().slice(0, 240) || undefined,
             },
           }))
           .filter((field) => field.key && field.label && field.selector.selector)
@@ -637,29 +644,35 @@ export class OnboardingService {
         name: {
           selector: String(input.selectors?.name?.selector || "").trim(),
           mode: input.selectors?.name?.mode === "src" ? "src" : "text",
+          sampleText: String(input.selectors?.name?.sampleText || "").trim().slice(0, 240) || undefined,
         },
         price: input.selectors?.price?.selector
           ? {
               selector: String(input.selectors.price.selector).trim(),
               mode: "text",
+              sampleText: String(input.selectors.price.sampleText || "").trim().slice(0, 240) || undefined,
             }
           : undefined,
         image: input.selectors?.image?.selector
           ? {
               selector: String(input.selectors.image.selector).trim(),
               mode: input.selectors.image.mode === "src" ? "src" : "text",
+              sampleText: String(input.selectors.image.sampleText || "").trim().slice(0, 240) || undefined,
             }
           : undefined,
         description: input.selectors?.description?.selector
           ? {
               selector: String(input.selectors.description.selector).trim(),
               mode: "text",
+              sampleText:
+                String(input.selectors.description.sampleText || "").trim().slice(0, 240) || undefined,
             }
           : undefined,
         inStock: input.selectors?.inStock?.selector
           ? {
               selector: String(input.selectors.inStock.selector).trim(),
               mode: "text",
+              sampleText: String(input.selectors.inStock.sampleText || "").trim().slice(0, 240) || undefined,
             }
           : undefined,
       },
@@ -671,6 +684,7 @@ export class OnboardingService {
               selector: {
                 selector: String(field.selector?.selector || "").trim().slice(0, 400),
                 mode: (field.selector?.mode === "src" ? "src" : "text") as "text" | "src",
+                sampleText: String(field.selector?.sampleText || "").trim().slice(0, 240) || undefined,
               },
             }))
             .filter((field) => field.key && field.label && field.selector.selector)

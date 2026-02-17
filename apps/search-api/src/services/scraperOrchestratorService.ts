@@ -868,39 +868,79 @@ export class ScraperOrchestratorService {
   ): string {
     const mode = selector.mode === "src" ? "src" : "text";
     const desired = expectedMode === "src" ? "src" : mode;
-    const token = this.resolveCandidateSelector(selector.selector);
-    if (!token) return "";
-    const element = this.findElementBySimpleSelector(html, token);
-    if (!element) return "";
+    const tokens = this.resolveCandidateSelectorTokens(selector.selector);
+    if (tokens.length === 0) return "";
 
-    if (desired === "src") {
-      const src = element.attributes.src || element.attributes["data-src"] || element.attributes.content;
-      return String(src || "").trim();
+    for (const token of tokens) {
+      const elements = this.findElementsBySimpleSelector(html, token);
+      if (elements.length === 0) continue;
+      const best = this.pickBestAssistElement(elements, selector.sampleText, desired);
+      if (!best) continue;
+
+      if (desired === "src") {
+        const src =
+          best.attributes.src || best.attributes["data-src"] || best.attributes.content;
+        const normalizedSrc = String(src || "").trim();
+        if (normalizedSrc) return normalizedSrc;
+      } else {
+        const textFromAttr = best.attributes.content || best.attributes["aria-label"];
+        const text = this.stripHtml(textFromAttr || best.innerHtml || "");
+        if (text) return text.slice(0, 1500);
+      }
     }
 
-    const textFromAttr = element.attributes.content || element.attributes["aria-label"];
-    const text = this.stripHtml(textFromAttr || element.innerHtml || "");
-    return text.slice(0, 1500);
+    return "";
   }
 
-  private resolveCandidateSelector(selector: string): string {
+  private resolveCandidateSelectorTokens(selector: string): string[] {
     const raw = String(selector || "").trim();
-    if (!raw) return "";
-    const tokens = raw.split(/[\s>+~]+/).filter(Boolean);
-    const token = tokens[tokens.length - 1] || raw;
-    return token.trim();
+    if (!raw) return [];
+    const split = raw.split(/[\s>+~]+/).filter(Boolean);
+    const unique = new Set<string>();
+    const ranked = split
+      .map((token) => this.sanitizeSelectorToken(token))
+      .filter(Boolean)
+      .sort((a, b) => this.selectorSpecificityScore(b) - this.selectorSpecificityScore(a));
+
+    for (const token of ranked) {
+      if (!unique.has(token)) unique.add(token);
+    }
+
+    const fallback = this.sanitizeSelectorToken(raw);
+    if (fallback && !unique.has(fallback)) unique.add(fallback);
+    return Array.from(unique).slice(0, 8);
   }
 
-  private findElementBySimpleSelector(
+  private sanitizeSelectorToken(token: string): string {
+    const raw = String(token || "").trim();
+    if (!raw) return "";
+    return raw
+      .replace(/:{1,2}[a-zA-Z-]+(?:\([^)]*\))?/g, "")
+      .replace(/\\([:#.\[\]])/g, "$1")
+      .trim();
+  }
+
+  private selectorSpecificityScore(token: string): number {
+    const value = String(token || "");
+    let score = 0;
+    if (value.includes("#")) score += 10;
+    if (value.includes(".")) score += 5;
+    if (value.includes("[")) score += 4;
+    if (/^[a-zA-Z]/.test(value)) score += 1;
+    return score;
+  }
+
+  private findElementsBySimpleSelector(
     html: string,
     selectorToken: string
-  ): { tag: string; attributes: Record<string, string>; innerHtml: string } | null {
+  ): Array<{ tag: string; attributes: Record<string, string>; innerHtml: string }> {
     const selector = String(selectorToken || "").trim();
-    if (!selector) return null;
+    if (!selector) return [];
 
     const criteria = this.parseSimpleSelector(selector);
-    if (!criteria) return null;
+    if (!criteria) return [];
 
+    const out: Array<{ tag: string; attributes: Record<string, string>; innerHtml: string }> = [];
     const openTagRegex = /<([a-zA-Z0-9:-]+)([^>]*)>/g;
     let match: RegExpExecArray | null;
     while ((match = openTagRegex.exec(html))) {
@@ -915,10 +955,83 @@ export class ScraperOrchestratorService {
       const closeTag = `</${tag}>`;
       const end = html.indexOf(closeTag, start);
       const innerHtml = end >= 0 ? html.slice(start, end) : "";
-      return { tag, attributes, innerHtml };
+      out.push({ tag, attributes, innerHtml });
+      if (out.length >= 80) break;
     }
 
-    return null;
+    return out;
+  }
+
+  private pickBestAssistElement(
+    elements: Array<{ tag: string; attributes: Record<string, string>; innerHtml: string }>,
+    sampleText: string | undefined,
+    desiredMode: "text" | "src"
+  ): { tag: string; attributes: Record<string, string>; innerHtml: string } | null {
+    if (!elements.length) return null;
+    if (elements.length === 1) return elements[0] || null;
+
+    const expected = this.normalizeComparableText(sampleText || "");
+    let best: { tag: string; attributes: Record<string, string>; innerHtml: string } | null = null;
+    let bestScore = -1;
+
+    for (const element of elements) {
+      let score = 0;
+      const sourceCandidate =
+        String(
+          element.attributes.src || element.attributes["data-src"] || element.attributes.content || ""
+        ).trim();
+      const textCandidate = this.normalizeComparableText(
+        element.attributes.content || element.attributes["aria-label"] || this.stripHtml(element.innerHtml || "")
+      );
+
+      if (desiredMode === "src") {
+        if (sourceCandidate) score += 4;
+      } else if (textCandidate) {
+        score += 1;
+      }
+
+      if (expected) {
+        if (textCandidate === expected || sourceCandidate === sampleText) {
+          score += 8;
+        } else if (textCandidate.includes(expected) || expected.includes(textCandidate)) {
+          score += 5;
+        } else {
+          const overlap = this.tokenOverlapRatio(textCandidate, expected);
+          score += overlap * 4;
+        }
+      }
+
+      if (element.attributes.id) score += 0.4;
+      if (element.attributes.class) score += 0.2;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = element;
+      }
+    }
+
+    return best;
+  }
+
+  private normalizeComparableText(value: string): string {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/<[^>]*>/g, " ")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240);
+  }
+
+  private tokenOverlapRatio(left: string, right: string): number {
+    const a = new Set(String(left || "").split(/\s+/).filter((t) => t.length > 1));
+    const b = new Set(String(right || "").split(/\s+/).filter((t) => t.length > 1));
+    if (a.size === 0 || b.size === 0) return 0;
+    let overlap = 0;
+    for (const token of a) {
+      if (b.has(token)) overlap += 1;
+    }
+    return overlap / Math.max(a.size, b.size);
   }
 
   private parseSimpleSelector(selector: string): null | {
@@ -928,40 +1041,20 @@ export class ScraperOrchestratorService {
     attrName?: string;
     attrValue?: string;
   } {
-    const value = String(selector || "").trim();
+    const value = this.sanitizeSelectorToken(selector);
     if (!value) return null;
+    const idMatch = value.match(/#([a-zA-Z0-9_:-]+)/);
+    const classMatch = value.match(/\.([a-zA-Z0-9_:-]+)/);
+    const attrMatch = value.match(/\[([a-zA-Z0-9:_-]+)(?:=["']?([^"'\]]+)["']?)?\]/);
+    const tagMatch = value.match(/^([a-zA-Z0-9:-]+)/);
 
-    if (value.startsWith("#")) {
-      return { id: value.slice(1) };
-    }
-    if (value.startsWith(".")) {
-      return { className: value.slice(1) };
-    }
-
-    const attrMatch = value.match(/^\[([a-zA-Z0-9:_-]+)(?:=["']?([^"'\]]+)["']?)?\]$/);
-    if (attrMatch) {
-      return {
-        attrName: String(attrMatch[1] || "").toLowerCase(),
-        attrValue: attrMatch[2] ? String(attrMatch[2]) : undefined,
-      };
-    }
-
-    const tagClassMatch = value.match(/^([a-zA-Z0-9:-]+)\.([a-zA-Z0-9_-]+)$/);
-    if (tagClassMatch) {
-      return {
-        tag: String(tagClassMatch[1] || "").toLowerCase(),
-        className: String(tagClassMatch[2] || ""),
-      };
-    }
-
-    const tagMatch = value.match(/^([a-zA-Z0-9:-]+)$/);
-    if (tagMatch) {
-      return {
-        tag: String(tagMatch[1] || "").toLowerCase(),
-      };
-    }
-
-    return null;
+    return {
+      tag: tagMatch ? String(tagMatch[1] || "").toLowerCase() : undefined,
+      id: idMatch ? String(idMatch[1] || "") : undefined,
+      className: classMatch ? String(classMatch[1] || "") : undefined,
+      attrName: attrMatch ? String(attrMatch[1] || "").toLowerCase() : undefined,
+      attrValue: attrMatch?.[2] ? String(attrMatch[2]) : undefined,
+    };
   }
 
   private parseAttributesFromTag(attrsRaw: string): Record<string, string> {

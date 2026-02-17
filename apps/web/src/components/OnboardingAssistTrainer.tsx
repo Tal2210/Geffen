@@ -42,16 +42,16 @@ export interface GuideTemplatePayload {
   productUrl: string;
   category: string;
   selectors: {
-    name: { selector: string; mode: FieldMode };
-    price?: { selector: string; mode: FieldMode };
-    image?: { selector: string; mode: FieldMode };
-    description?: { selector: string; mode: FieldMode };
-    inStock?: { selector: string; mode: FieldMode };
+    name: { selector: string; mode: FieldMode; sampleText?: string };
+    price?: { selector: string; mode: FieldMode; sampleText?: string };
+    image?: { selector: string; mode: FieldMode; sampleText?: string };
+    description?: { selector: string; mode: FieldMode; sampleText?: string };
+    inStock?: { selector: string; mode: FieldMode; sampleText?: string };
   };
   customFields: Array<{
     key: string;
     label: string;
-    selector: { selector: string; mode: FieldMode };
+    selector: { selector: string; mode: FieldMode; sampleText?: string };
   }>;
 }
 
@@ -347,6 +347,7 @@ export function OnboardingAssistTrainer({
         selector: {
           selector: String(item.selector || ""),
           mode: item.mode,
+          sampleText: item.sampleText || undefined,
         },
       }));
 
@@ -358,21 +359,35 @@ export function OnboardingAssistTrainer({
         name: {
           selector: name,
           mode: "text",
+          sampleText: byKey.get("name")?.sampleText || undefined,
         },
         price: byKey.get("price")?.selector
-          ? { selector: String(byKey.get("price")?.selector || ""), mode: "text" }
+          ? {
+              selector: String(byKey.get("price")?.selector || ""),
+              mode: "text",
+              sampleText: byKey.get("price")?.sampleText || undefined,
+            }
           : undefined,
         image: byKey.get("image")?.selector
           ? {
               selector: String(byKey.get("image")?.selector || ""),
               mode: byKey.get("image")?.mode === "src" ? "src" : "text",
+              sampleText: byKey.get("image")?.sampleText || undefined,
             }
           : undefined,
         description: byKey.get("description")?.selector
-          ? { selector: String(byKey.get("description")?.selector || ""), mode: "text" }
+          ? {
+              selector: String(byKey.get("description")?.selector || ""),
+              mode: "text",
+              sampleText: byKey.get("description")?.sampleText || undefined,
+            }
           : undefined,
         inStock: byKey.get("inStock")?.selector
-          ? { selector: String(byKey.get("inStock")?.selector || ""), mode: "text" }
+          ? {
+              selector: String(byKey.get("inStock")?.selector || ""),
+              mode: "text",
+              sampleText: byKey.get("inStock")?.sampleText || undefined,
+            }
           : undefined,
       },
       customFields,
